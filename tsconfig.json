@@ -1,0 +1,17 @@
+# RunWars Workspace Root tsconfig
+# Mobile uses its own tsconfig (managed by Expo)
+# This exists for IDE tooling across the monorepo
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true
+  },
+  "references": [
+    { "path": "./packages/shared" },
+    { "path": "./backend" }
+  ]
+}
