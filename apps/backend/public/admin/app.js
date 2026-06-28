@@ -547,6 +547,7 @@ async function authenticate(secret) {
     authModal.style.display = 'none';
     authErrorMsg.innerText = '';
     initSockets();
+    setTimeout(() => map.invalidateSize(), 150);
     writeLog('Access verified successfully.', 'system');
   } else {
     localStorage.removeItem('runwars-admin-token');
@@ -661,6 +662,7 @@ window.addEventListener('load', async () => {
     if (verified) {
       authModal.style.display = 'none';
       initSockets();
+      setTimeout(() => map.invalidateSize(), 150);
     } else {
       authModal.style.display = 'flex';
     }

@@ -114,8 +114,16 @@ body {
   min-height: 0;
 }
 
-.tab-view.active-view {
+#tab-view-dashboard.active-view {
   display: grid;
+}
+
+#tab-view-users.active-view {
+  display: flex;
+}
+
+#tab-view-push.active-view {
+  display: flex;
 }
 
 /* System Stats */
@@ -184,6 +192,7 @@ body {
 /* Dashboard Ops View Grid */
 .ops-dashboard {
   grid-template-columns: 2fr 1fr;
+  grid-template-rows: 1fr;
   gap: 20px;
 }
 
