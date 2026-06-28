@@ -589,21 +589,17 @@ async function resetMapGrid() {
 function setupTabs() {
   tabBtns.forEach(btn => {
     btn.addEventListener('click', () => {
-      // Remove active states
       tabBtns.forEach(b => b.classList.remove('active'));
       tabViews.forEach(v => v.classList.remove('active-view'));
 
-      // Add active state to selected
       btn.classList.add('active');
       const tabName = btn.getAttribute('data-tab');
       document.getElementById(`tab-view-${tabName}`).classList.add('active-view');
 
-      // Trigger loads if needed
       if (tabName === 'users') {
         fetchUsers();
       } else if (tabName === 'dashboard') {
-        // Redraw map container to fix leaflet size rendering issues on hidden containers
-        setTimeout(() => map.invalidateSize(), 50);
+        setTimeout(() => map.invalidateSize(), 80);
       }
     });
   });

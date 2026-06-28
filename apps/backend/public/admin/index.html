@@ -4,12 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>RunWars Live Admin Operations Panel</title>
-  <!-- Google Fonts & Leaflet Map CSS -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
-  <!-- Custom Styling -->
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -17,10 +15,11 @@
   <!-- Authentication Modal -->
   <div id="auth-modal" class="modal-overlay">
     <div class="modal-card">
-      <h2>🛡️ Admin Access Verification</h2>
-      <p>Please enter the RunWars administration secret key to proceed.</p>
+      <div class="modal-logo">🛡️</div>
+      <h2>Admin Access Verification</h2>
+      <p>Enter your RunWars administration secret key to proceed.</p>
       <input type="password" id="admin-secret-input" placeholder="Enter Secret Key..." />
-      <button id="auth-submit-btn">Verify Access</button>
+      <button id="auth-submit-btn" class="btn-primary btn-large" style="width:100%;margin-top:12px;">Verify Access</button>
       <div id="auth-error-msg" class="error-msg"></div>
     </div>
   </div>
@@ -61,87 +60,88 @@
   </div>
 
   <div class="app-container">
-    <!-- Header -->
+
+    <!-- ===== HEADER ===== -->
     <header class="main-header">
       <div class="logo-area">
         <h1>RunWars <span>Admin Ops</span></h1>
       </div>
       <nav class="tab-navigation">
-        <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
-        <button class="tab-btn" data-tab="users">User Inspector</button>
-        <button class="tab-btn" data-tab="push">Push Broadcaster</button>
+        <button class="tab-btn active" data-tab="dashboard">📊 Dashboard</button>
+        <button class="tab-btn" data-tab="users">👥 User Inspector</button>
+        <button class="tab-btn" data-tab="push">📢 Push Broadcaster</button>
       </nav>
       <div class="system-status">
         <div class="status-badge" id="db-status"><span class="indicator red"></span> DB: Checking...</div>
-        <div class="status-badge" id="uptime-status">Uptime: 00:00:00</div>
-        <button id="logout-btn" class="btn-secondary">Lock Panel</button>
+        <div class="status-badge" id="uptime-status">⏱ 00:00:00</div>
+        <button id="logout-btn" class="btn-secondary">🔒 Lock Panel</button>
       </div>
     </header>
 
-    <!-- Metrics Summary -->
+    <!-- ===== METRICS ROW ===== -->
     <section class="metrics-grid">
       <div class="metric-card glass">
-        <h3>Live Connections</h3>
+        <div class="metric-icon">🔗</div>
         <div class="metric-value" id="val-sockets">0</div>
+        <h3>Live Connections</h3>
         <p>Active web sockets</p>
       </div>
       <div class="metric-card glass">
-        <h3>Total Registered Users</h3>
+        <div class="metric-icon">👤</div>
         <div class="metric-value" id="val-users">0</div>
+        <h3>Registered Users</h3>
         <p>In Supabase DB</p>
       </div>
       <div class="metric-card glass">
-        <h3>Claimed Zones</h3>
+        <div class="metric-icon">🗺</div>
         <div class="metric-value" id="val-territories">0</div>
+        <h3>Claimed Zones</h3>
         <p>Active polygons</p>
+      </div>
+      <div class="metric-card glass cmd-card">
+        <div class="cmd-label">⚡ System Commands</div>
+        <div class="btn-group">
+          <button id="refresh-stats-btn" class="btn-primary">Refresh Metrics</button>
+          <button id="reset-grid-btn" class="btn-danger">Reset Map Grid</button>
+        </div>
       </div>
     </section>
 
-    <!-- View: Dashboard (Default) -->
-    <main id="tab-view-dashboard" class="tab-view active-view ops-dashboard">
-      <!-- Left Column: Map -->
-      <section class="map-section glass">
-        <div class="section-header">
-          <h2>🗺️ Live Map Tracking</h2>
+    <!-- ===== TAB VIEW: DASHBOARD ===== -->
+    <main id="tab-view-dashboard" class="tab-view active-view">
+
+      <!-- Row 1: Map (full width) -->
+      <section class="panel glass map-panel">
+        <div class="panel-header">
+          <div class="panel-title">🗺️ Live Map Tracking</div>
           <div class="map-toggles">
             <label class="switch">
               <input type="checkbox" id="heatmap-toggle">
-              <span class="slider round"></span>
+              <span class="slider"></span>
             </label>
-            <span class="toggle-label">Toggle Activity Heatmap</span>
+            <span class="toggle-label">Activity Heatmap</span>
           </div>
         </div>
         <div id="map"></div>
       </section>
 
-      <!-- Right Column: Controls & Logs -->
-      <section class="side-panel">
-        <!-- Control Actions -->
-        <div class="control-box glass">
-          <h2>⚡ System Commands</h2>
-          <div class="btn-group">
-            <button id="refresh-stats-btn" class="btn-primary">Refresh Metrics</button>
-            <button id="reset-grid-btn" class="btn-danger">Reset Map Grid</button>
-          </div>
+      <!-- Row 2: Real-time Log (full width) -->
+      <section class="panel glass log-panel">
+        <div class="panel-header">
+          <div class="panel-title">📜 Real-time System Stream</div>
+          <button id="clear-logs-btn" class="btn-clear">Clear</button>
         </div>
-
-        <!-- Terminal Logs -->
-        <div class="log-box glass">
-          <div class="section-header">
-            <h2>📜 Real-time System Stream</h2>
-            <button id="clear-logs-btn" class="btn-clear">Clear</button>
-          </div>
-          <div id="terminal-log" class="terminal">
-            <div class="log-line system">[System] Listening for operations events...</div>
-          </div>
+        <div id="terminal-log" class="terminal">
+          <div class="log-line system">[System] Listening for operations events...</div>
         </div>
       </section>
+
     </main>
 
-    <!-- View: Users Inspector -->
-    <main id="tab-view-users" class="tab-view glass user-inspector-view">
-      <div class="section-header">
-        <h2>👥 User Directory & Running Statistics</h2>
+    <!-- ===== TAB VIEW: USER INSPECTOR ===== -->
+    <main id="tab-view-users" class="tab-view panel glass user-inspector-view">
+      <div class="panel-header">
+        <div class="panel-title">👥 User Directory &amp; Running Statistics</div>
         <button id="refresh-users-btn" class="btn-primary">Refresh Directory</button>
       </div>
       <div class="table-container">
@@ -167,24 +167,44 @@
       </div>
     </main>
 
-    <!-- View: Push Broadcaster -->
-    <main id="tab-view-push" class="tab-view glass push-broadcaster-view">
-      <div class="form-container">
-        <h2>📢 Push Notification Broadcast Center</h2>
-        <p class="description">Broadcast custom system notifications to all testers currently registered with Expo push tokens.</p>
-        <div class="form-group-block">
-          <div class="form-group">
-            <label for="push-title">Notification Title</label>
-            <input type="text" id="push-title" placeholder="e.g. ⚔️ Territory Battle Alert" />
-          </div>
-          <div class="form-group">
-            <label for="push-body">Message Body</label>
-            <textarea id="push-body" rows="4" placeholder="e.g. Weekend Conquest Event is now live! Claim zones to double your distance."></textarea>
-          </div>
-          <button id="send-push-btn" class="btn-primary btn-large">Send Broadcast Message</button>
+    <!-- ===== TAB VIEW: PUSH BROADCASTER ===== -->
+    <main id="tab-view-push" class="tab-view push-wrapper">
+
+      <!-- Push Form Card -->
+      <section class="panel glass push-card">
+        <div class="panel-header">
+          <div class="panel-title">📢 Broadcast Notification</div>
         </div>
-      </div>
+        <p class="push-desc">Send a push alert to all active Expo-registered devices instantly.</p>
+        <div class="form-group">
+          <label for="push-title">Notification Title</label>
+          <input type="text" id="push-title" placeholder="e.g. ⚔️ Territory Battle Alert" />
+        </div>
+        <div class="form-group" style="margin-top:14px;">
+          <label for="push-body">Message Body</label>
+          <textarea id="push-body" rows="5" placeholder="e.g. Weekend Conquest Event is now live! Claim zones to double your distance."></textarea>
+        </div>
+        <button id="send-push-btn" class="btn-primary btn-large" style="width:100%;margin-top:20px;">
+          🚀 Send Broadcast to All Users
+        </button>
+      </section>
+
+      <!-- Push Tips Card -->
+      <section class="panel glass push-tips">
+        <div class="panel-header">
+          <div class="panel-title">💡 Broadcast Tips</div>
+        </div>
+        <ul class="tips-list">
+          <li><strong>🎯 Be specific</strong> – Short, clear titles get more opens.</li>
+          <li><strong>⚠️ Use sparingly</strong> – Too many notifications reduce engagement.</li>
+          <li><strong>🏃 Action-driven</strong> – Tell users what to do next ("Log in now!", "Claim your zone!").</li>
+          <li><strong>📊 Check count</strong> – Only users with Expo tokens registered will receive this. Uninstalled or background-off apps may not show it.</li>
+          <li><strong>🕐 Best time</strong> – Send during peak evening hours (6pm–9pm) for max engagement.</li>
+        </ul>
+      </section>
+
     </main>
+
   </div>
 
   <!-- Socket.io and Leaflet JS libraries -->
