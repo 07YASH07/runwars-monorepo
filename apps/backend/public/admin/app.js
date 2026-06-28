@@ -4,8 +4,10 @@ let map;
 let socket;
 const playerMarkers = new Map(); // userId -> L.circleMarker
 const territoryPolygons = new Map(); // id -> L.polygon
+let heatmapLayer = null;
 let serverUptimeSeconds = 0;
 let uptimeInterval;
+let allUsersData = [];
 
 // DOM Elements
 const authModal = document.getElementById('auth-modal');
@@ -25,12 +27,37 @@ const resetGridBtn = document.getElementById('reset-grid-btn');
 const clearLogsBtn = document.getElementById('clear-logs-btn');
 const terminalLog = document.getElementById('terminal-log');
 
+// Tabs DOM
+const tabBtns = document.querySelectorAll('.tab-btn');
+const tabViews = document.querySelectorAll('.tab-view');
+
+// Heatmap DOM
+const heatmapToggle = document.getElementById('heatmap-toggle');
+
+// Users DOM
+const refreshUsersBtn = document.getElementById('refresh-users-btn');
+const userTableBody = document.getElementById('user-table-body');
+
+// Edit User Modal DOM
+const editUserModal = document.getElementById('edit-user-modal');
+const editUserId = document.getElementById('edit-user-id');
+const editUserName = document.getElementById('edit-user-name');
+const editUserCharacter = document.getElementById('edit-user-character');
+const editUserColor = document.getElementById('edit-user-color');
+const editUserBio = document.getElementById('edit-user-bio');
+const saveUserBtn = document.getElementById('save-user-btn');
+const deleteUserBtn = document.getElementById('delete-user-btn');
+const cancelUserBtn = document.getElementById('cancel-user-btn');
+
+// Push DOM
+const pushTitle = document.getElementById('push-title');
+const pushBody = document.getElementById('push-body');
+const sendPushBtn = document.getElementById('send-push-btn');
+
 // Setup Leaflet Map
 function initMap() {
-  // Center on India by default
   map = L.map('map').setView([20.5937, 78.9629], 5);
   
-  // Use CartoDB Dark Matter tile layer for premium dark aesthetics
   L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
     subdomains: 'abcd',
@@ -48,7 +75,7 @@ function writeLog(text, type = 'system') {
   terminalLog.scrollTop = terminalLog.scrollHeight;
 }
 
-// Get admin token from storage
+// Get admin token
 function getAdminToken() {
   return localStorage.getItem('runwars-admin-token');
 }
@@ -72,19 +99,16 @@ async function fetchStats() {
 
     const stats = await res.json();
     
-    // Update stats UI
     valSockets.innerText = stats.activeSockets;
     valUsers.innerText = stats.usersCount;
     valTerritories.innerText = stats.territoriesCount;
     
-    // DB indicator
     if (stats.dbConnected) {
       dbStatus.innerHTML = '<span class="indicator green"></span> DB: Connected';
     } else {
       dbStatus.innerHTML = '<span class="indicator red"></span> DB: Disconnected';
     }
 
-    // Reset uptime counter
     serverUptimeSeconds = stats.uptime;
     startUptimeCounter();
 
@@ -107,7 +131,240 @@ function startUptimeCounter() {
   }, 1000);
 }
 
-// Socket communication
+// Fetch Users Directory
+async function fetchUsers() {
+  const token = getAdminToken();
+  if (!token) return;
+
+  userTableBody.innerHTML = '<tr><td colspan="8" class="text-center">Loading users directory...</td></tr>';
+
+  try {
+    const res = await fetch('/api/admin/users', {
+      headers: { 'x-admin-token': token }
+    });
+
+    if (!res.ok) throw new Error('Failed to load users');
+
+    const users = await res.json();
+    allUsersData = users;
+    
+    if (users.length === 0) {
+      userTableBody.innerHTML = '<tr><td colspan="8" class="text-center">No users registered in database.</td></tr>';
+      return;
+    }
+
+    userTableBody.innerHTML = '';
+    users.forEach(u => {
+      const tr = document.createElement('tr');
+      const distKm = (u.total_distance / 1000).toFixed(2);
+      const color = u.color || '#3b82f6';
+      const classNameBadge = (u.character_type || 'Runner').toLowerCase();
+      
+      tr.innerHTML = `
+        <td><strong>${u.display_name || 'Runner'}</strong><br><small style="color:var(--text-secondary)">ID: ${u.id.substring(0, 8)}...</small></td>
+        <td>${u.email || 'No email'}</td>
+        <td><span class="badge ${classNameBadge}">${u.character_type || 'Runner'}</span></td>
+        <td>
+          <div class="color-preview">
+            <span class="color-dot" style="background-color:${color}"></span>
+            ${color}
+          </div>
+        </td>
+        <td>${u.total_runs}</td>
+        <td>${distKm} km</td>
+        <td>${u.total_territory.toFixed(0)} sqm</td>
+        <td>
+          <button class="btn-secondary btn-sm edit-user-trigger" data-id="${u.id}">Edit</button>
+        </td>
+      `;
+      userTableBody.appendChild(tr);
+    });
+
+    // Hook up trigger buttons
+    document.querySelectorAll('.edit-user-trigger').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const uid = e.target.getAttribute('data-id');
+        openEditUserModal(uid);
+      });
+    });
+
+  } catch (err) {
+    userTableBody.innerHTML = `<tr><td colspan="8" class="text-center error-msg">Error: ${err.message}</td></tr>`;
+  }
+}
+
+// User Modal Operations
+function openEditUserModal(userId) {
+  const user = allUsersData.find(u => u.id === userId);
+  if (!user) return;
+
+  editUserId.value = user.id;
+  editUserName.value = user.display_name || '';
+  editUserCharacter.value = user.character_type || 'Runner';
+  editUserColor.value = user.color || '#3b82f6';
+  editUserBio.value = user.bio || '';
+
+  editUserModal.style.display = 'flex';
+}
+
+async function saveUserDetails() {
+  const token = getAdminToken();
+  const payload = {
+    userId: editUserId.value,
+    displayName: editUserName.value.trim(),
+    characterType: editUserCharacter.value,
+    color: editUserColor.value.trim(),
+    bio: editUserBio.value.trim()
+  };
+
+  try {
+    const res = await fetch('/api/admin/user/update', {
+      method: 'POST',
+      headers: {
+        'x-admin-token': token,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (res.ok) {
+      writeLog(`User profile updated: ${payload.displayName}`, 'system');
+      editUserModal.style.display = 'none';
+      fetchUsers();
+      fetchStats();
+      // Restart sockets to grab updated user markers
+      initSockets();
+    } else {
+      const err = await res.json();
+      alert(`Failed to save: ${err.error}`);
+    }
+  } catch (err) {
+    alert(`Save error: ${err.message}`);
+  }
+}
+
+async function deleteUser() {
+  const uid = editUserId.value;
+  const user = allUsersData.find(u => u.id === uid);
+  const name = user ? user.display_name : 'this user';
+  
+  const confirmed = confirm(`⚠️ DANGER: Are you sure you want to permanently delete user "${name}"?\nThis will wipe all their stats, runs, and map territories!`);
+  if (!confirmed) return;
+
+  const token = getAdminToken();
+  try {
+    const res = await fetch(`/api/admin/user/${uid}`, {
+      method: 'DELETE',
+      headers: { 'x-admin-token': token }
+    });
+
+    if (res.ok) {
+      writeLog(`User deleted: ${name}`, 'leave');
+      editUserModal.style.display = 'none';
+      fetchUsers();
+      fetchStats();
+    } else {
+      const err = await res.json();
+      alert(`Delete failed: ${err.error}`);
+    }
+  } catch (err) {
+    alert(`Error: ${err.message}`);
+  }
+}
+
+// Push Notifications Broadcaster
+async function sendPushBroadcast() {
+  const token = getAdminToken();
+  const payload = {
+    title: pushTitle.value.trim(),
+    body: pushBody.value.trim()
+  };
+
+  if (!payload.title || !payload.body) {
+    alert('Please fill out both notification title and body.');
+    return;
+  }
+
+  sendPushBtn.disabled = true;
+  sendPushBtn.innerText = 'Sending Broadcast...';
+
+  try {
+    const res = await fetch('/api/admin/broadcast-push', {
+      method: 'POST',
+      headers: {
+        'x-admin-token': token,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      writeLog(`Push Broadcast Sent: "${payload.title}" to ${data.sentCount} devices.`, 'system');
+      pushTitle.value = '';
+      pushBody.value = '';
+    } else {
+      const err = await res.json();
+      alert(`Broadcast failed: ${err.error}`);
+    }
+  } catch (err) {
+    alert(`Error: ${err.message}`);
+  } finally {
+    sendPushBtn.disabled = false;
+    sendPushBtn.innerText = 'Send Broadcast Message';
+  }
+}
+
+// Heatmap overlays
+async function toggleHeatmap(show) {
+  const token = getAdminToken();
+  
+  if (!show) {
+    if (heatmapLayer) {
+      map.removeLayer(heatmapLayer);
+      heatmapLayer = null;
+    }
+    // Restore polygons
+    for (const poly of territoryPolygons.values()) {
+      poly.addTo(map);
+    }
+    return;
+  }
+
+  // Remove active polygons from map view temporarily
+  for (const poly of territoryPolygons.values()) {
+    map.removeLayer(poly);
+  }
+
+  try {
+    const res = await fetch('/api/admin/heatmap', {
+      headers: { 'x-admin-token': token }
+    });
+
+    if (!res.ok) throw new Error('Failed to fetch heatmap data');
+
+    const points = await res.json();
+    const heatPoints = points.map(pt => [pt.latitude, pt.longitude, 0.6]); // format: [lat, lng, intensity]
+
+    if (heatmapLayer) map.removeLayer(heatmapLayer);
+
+    heatmapLayer = L.heatLayer(heatPoints, {
+      radius: 20,
+      blur: 15,
+      maxZoom: 16,
+      gradient: {0.4: 'blue', 0.6: 'cyan', 0.8: 'yellow', 1.0: 'red'}
+    }).addTo(map);
+
+    writeLog(`Loaded heatmap coordinates: ${heatPoints.length} points plotted.`, 'system');
+
+  } catch (err) {
+    writeLog(`Heatmap error: ${err.message}`, 'leave');
+    heatmapToggle.checked = false;
+    toggleHeatmap(false);
+  }
+}
+
+// Socket communication setup
 function initSockets() {
   if (socket) socket.disconnect();
 
@@ -121,9 +378,7 @@ function initSockets() {
     writeLog('Disconnected from WebSocket server.', 'leave');
   });
 
-  // Track live players
   socket.on('livePlayersUpdate', (players) => {
-    // Remove markers of players no longer active
     const activeIds = new Set(players.map(p => p.userId));
     for (const [userId, marker] of playerMarkers.entries()) {
       if (!activeIds.has(userId)) {
@@ -131,8 +386,6 @@ function initSockets() {
         playerMarkers.delete(userId);
       }
     }
-
-    // Add or update markers
     players.forEach(p => {
       if (p.currentPosition && p.currentPosition.latitude !== 0) {
         updatePlayerMarker(p);
@@ -143,6 +396,9 @@ function initSockets() {
   socket.on('playerJoined', (player) => {
     writeLog(`Player joined: ${player.displayName} (${player.characterType})`, 'join');
     fetchStats();
+    if (document.getElementById('tab-view-users').classList.contains('active-view')) {
+      fetchUsers();
+    }
   });
 
   socket.on('playerLeft', (data) => {
@@ -153,9 +409,11 @@ function initSockets() {
       playerMarkers.delete(data.userId);
     }
     fetchStats();
+    if (document.getElementById('tab-view-users').classList.contains('active-view')) {
+      fetchUsers();
+    }
   });
 
-  // Update specific player location
   socket.on('locationUpdated', (data) => {
     const marker = playerMarkers.get(data.userId);
     const pos = [data.point.latitude, data.point.longitude];
@@ -164,33 +422,68 @@ function initSockets() {
       marker.setLatLng(pos);
       marker.getPopup().setContent(`<strong>${marker.options.displayName}</strong><br>Speed: ${data.speedKmh.toFixed(1)} km/h<br>Status: Moving`);
     } else {
-      // Fetch stats to get full player data for marker creation
       fetchStats();
     }
   });
 
-  // Territories handling
   socket.on('territoriesUpdate', (territories) => {
-    // Clear old polygons
     for (const poly of territoryPolygons.values()) {
       poly.remove();
     }
     territoryPolygons.clear();
 
-    // Draw new polygons
-    territories.forEach(drawTerritory);
+    // Draw only if heatmap is not active
+    if (!heatmapToggle.checked) {
+      territories.forEach(drawTerritory);
+    } else {
+      // Just save references
+      territories.forEach(t => {
+        const latLngs = t.polygonCoordinates.map(c => [c.latitude, c.longitude]);
+        const color = t.color || '#34c759';
+        const poly = L.polygon(latLngs, {
+          color: color,
+          fillColor: color,
+          fillOpacity: 0.3,
+          weight: 2
+        });
+        poly.bindPopup(`<strong>Owner:</strong> ${t.ownerName}<br><strong>Area:</strong> ${t.areaSquareMeters.toFixed(1)} sqm`);
+        territoryPolygons.set(t.id, poly);
+      });
+    }
     valTerritories.innerText = territories.length;
   });
 
   socket.on('territoryClaimed', (t) => {
     writeLog(`New zone claimed by ${t.ownerName} (${t.areaSquareMeters.toFixed(0)} sqm)`, 'claim');
-    drawTerritory(t);
+    
+    // Draw polygon
+    const latLngs = t.polygonCoordinates.map(c => [c.latitude, c.longitude]);
+    const color = t.color || '#34c759';
+    const poly = L.polygon(latLngs, {
+      color: color,
+      fillColor: color,
+      fillOpacity: 0.3,
+      weight: 2
+    });
+    poly.bindPopup(`<strong>Owner:</strong> ${t.ownerName}<br><strong>Area:</strong> ${t.areaSquareMeters.toFixed(1)} sqm`);
+    
+    territoryPolygons.set(t.id, poly);
+    if (!heatmapToggle.checked) {
+      poly.addTo(map);
+    }
+    
     fetchStats();
+    if (document.getElementById('tab-view-users').classList.contains('active-view')) {
+      fetchUsers();
+    }
   });
 
   socket.on('conflict:resolved', (battle) => {
     writeLog(`⚔️ BATTLE: Winner ${battle.winnerId} (${battle.winnerDistance.toFixed(0)}m) vs Loser ${battle.loserId} (${battle.loserDistance.toFixed(0)}m)`, 'battle');
     fetchStats();
+    if (document.getElementById('tab-view-users').classList.contains('active-view')) {
+      fetchUsers();
+    }
   });
 }
 
@@ -220,7 +513,6 @@ function updatePlayerMarker(p) {
 function drawTerritory(t) {
   if (!t.polygonCoordinates || t.polygonCoordinates.length === 0) return;
   
-  // Format coordinate array for Leaflet: [[lat, lng], [lat, lng], ...]
   const latLngs = t.polygonCoordinates.map(c => [c.latitude, c.longitude]);
   const color = t.color || '#34c759';
 
@@ -280,6 +572,9 @@ async function resetMapGrid() {
     if (res.ok) {
       writeLog('Grid successfully reset. All zones cleared.', 'battle');
       fetchStats();
+      if (document.getElementById('tab-view-users').classList.contains('active-view')) {
+        fetchUsers();
+      }
     } else {
       const err = await res.json();
       alert(`Reset failed: ${err.error || 'Unknown error'}`);
@@ -287,6 +582,30 @@ async function resetMapGrid() {
   } catch (err) {
     alert(`Error resetting map grid: ${err.message}`);
   }
+}
+
+// Tab navigation handler
+function setupTabs() {
+  tabBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      // Remove active states
+      tabBtns.forEach(b => b.classList.remove('active'));
+      tabViews.forEach(v => v.classList.remove('active-view'));
+
+      // Add active state to selected
+      btn.classList.add('active');
+      const tabName = btn.getAttribute('data-tab');
+      document.getElementById(`tab-view-${tabName}`).classList.add('active-view');
+
+      // Trigger loads if needed
+      if (tabName === 'users') {
+        fetchUsers();
+      } else if (tabName === 'dashboard') {
+        // Redraw map container to fix leaflet size rendering issues on hidden containers
+        setTimeout(() => map.invalidateSize(), 50);
+      }
+    });
+  });
 }
 
 // Event Listeners
@@ -315,9 +634,26 @@ clearLogsBtn.addEventListener('click', () => {
   terminalLog.innerHTML = '<div class="log-line system">[System] Logs cleared.</div>';
 });
 
+// Heatmap Toggle
+heatmapToggle.addEventListener('change', (e) => {
+  toggleHeatmap(e.target.checked);
+});
+
+// User table actions
+refreshUsersBtn.addEventListener('click', fetchUsers);
+cancelUserBtn.addEventListener('click', () => {
+  editUserModal.style.display = 'none';
+});
+saveUserBtn.addEventListener('click', saveUserDetails);
+deleteUserBtn.addEventListener('click', deleteUser);
+
+// Push Broadcaster action
+sendPushBtn.addEventListener('click', sendPushBroadcast);
+
 // App Startup
 window.addEventListener('load', async () => {
   initMap();
+  setupTabs();
   
   const token = getAdminToken();
   if (token) {

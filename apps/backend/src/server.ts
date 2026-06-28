@@ -596,6 +596,104 @@ app.post('/api/admin/reset-grid', adminAuthMiddleware, async (req, res) => {
   }
 });
 
+app.post('/api/admin/broadcast-push', adminAuthMiddleware, async (req, res) => {
+  try {
+    const { title, body } = req.body;
+    if (!title || !body) {
+      return res.status(400).json({ error: 'Title and body are required' });
+    }
+    let sentCount = 0;
+    for (const [userId, token] of pushTokens.entries()) {
+      await sendPushNotification(token, title, body);
+      sentCount++;
+    }
+    res.json({ success: true, sentCount });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/users', adminAuthMiddleware, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        u.id, u.email, u.display_name, u.character_type, u.color, u.bio, u.avatar_url,
+        COALESCE(SUM(t.area_square_meters), 0)::float AS total_territory,
+        COUNT(DISTINCT r.id)::int AS total_runs,
+        COALESCE(SUM(r.distance_meters), 0)::float AS total_distance
+      FROM users u
+      LEFT JOIN territories t ON t.owner_id = u.id
+      LEFT JOIN runs r ON r.user_id = u.id
+      GROUP BY u.id
+      ORDER BY u.created_at DESC
+    `);
+    res.json(result.rows);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/user/update', adminAuthMiddleware, async (req, res) => {
+  try {
+    const { userId, displayName, characterType, color, bio } = req.body;
+    if (!userId) {
+      return res.status(400).json({ error: 'userId is required' });
+    }
+    await pool.query(
+      `UPDATE users SET
+         display_name = COALESCE($2, display_name),
+         character_type = COALESCE($3, character_type),
+         color = COALESCE($4, color),
+         bio = COALESCE($5, bio)
+       WHERE id = $1`,
+      [userId, displayName || null, characterType || null, color || null, bio || null]
+    );
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/admin/user/:id', adminAuthMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query('DELETE FROM users WHERE id = $1', [id]);
+    livePlayers.delete(id);
+    for (const [tId, t] of territoriesCache.entries()) {
+      if (t.userId === id) {
+        territoriesCache.delete(tId);
+      }
+    }
+    io.emit('territoriesUpdate', Array.from(territoriesCache.values()));
+    io.emit('livePlayersUpdate', Array.from(livePlayers.values()));
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/heatmap', adminAuthMiddleware, async (req, res) => {
+  try {
+    const result = await pool.query('SELECT route_points FROM runs');
+    const points: { latitude: number; longitude: number }[] = [];
+    result.rows.forEach(row => {
+      try {
+        const pathData = row.route_points;
+        if (Array.isArray(pathData)) {
+          pathData.forEach((pt: any) => {
+            if (pt && typeof pt.latitude === 'number' && typeof pt.longitude === 'number') {
+              points.push({ latitude: pt.latitude, longitude: pt.longitude });
+            }
+          });
+        }
+      } catch (e) {}
+    });
+    res.json(points);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 
 server.listen(PORT, () => {

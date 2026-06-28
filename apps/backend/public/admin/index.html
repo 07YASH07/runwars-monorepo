@@ -25,12 +25,52 @@
     </div>
   </div>
 
+  <!-- Edit User Modal -->
+  <div id="edit-user-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-card edit-card">
+      <h2>👤 Edit User Profile</h2>
+      <p>Modify player stats and character class attributes.</p>
+      <input type="hidden" id="edit-user-id" />
+      <div class="form-group">
+        <label for="edit-user-name">Display Name</label>
+        <input type="text" id="edit-user-name" placeholder="Name" />
+      </div>
+      <div class="form-group">
+        <label for="edit-user-character">Character Class</label>
+        <select id="edit-user-character">
+          <option value="Runner">Runner</option>
+          <option value="Knight">Knight</option>
+          <option value="Ninja">Ninja</option>
+          <option value="Cyber">Cyber</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="edit-user-color">Marker Color (Hex)</label>
+        <input type="text" id="edit-user-color" placeholder="#HexColor" />
+      </div>
+      <div class="form-group">
+        <label for="edit-user-bio">Bio Details</label>
+        <textarea id="edit-user-bio" rows="2" placeholder="User bio description..."></textarea>
+      </div>
+      <div class="modal-action-buttons">
+        <button id="save-user-btn" class="btn-primary">Save Changes</button>
+        <button id="delete-user-btn" class="btn-danger">Delete User</button>
+        <button id="cancel-user-btn" class="btn-secondary">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <div class="app-container">
     <!-- Header -->
     <header class="main-header">
       <div class="logo-area">
         <h1>RunWars <span>Admin Ops</span></h1>
       </div>
+      <nav class="tab-navigation">
+        <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
+        <button class="tab-btn" data-tab="users">User Inspector</button>
+        <button class="tab-btn" data-tab="push">Push Broadcaster</button>
+      </nav>
       <div class="system-status">
         <div class="status-badge" id="db-status"><span class="indicator red"></span> DB: Checking...</div>
         <div class="status-badge" id="uptime-status">Uptime: 00:00:00</div>
@@ -57,13 +97,19 @@
       </div>
     </section>
 
-    <!-- Main Live Operations Dashboard -->
-    <main class="ops-dashboard">
+    <!-- View: Dashboard (Default) -->
+    <main id="tab-view-dashboard" class="tab-view active-view ops-dashboard">
       <!-- Left Column: Map -->
       <section class="map-section glass">
         <div class="section-header">
           <h2>🗺️ Live Map Tracking</h2>
-          <span class="pulse-icon"></span>
+          <div class="map-toggles">
+            <label class="switch">
+              <input type="checkbox" id="heatmap-toggle">
+              <span class="slider round"></span>
+            </label>
+            <span class="toggle-label">Toggle Activity Heatmap</span>
+          </div>
         </div>
         <div id="map"></div>
       </section>
@@ -91,11 +137,61 @@
         </div>
       </section>
     </main>
+
+    <!-- View: Users Inspector -->
+    <main id="tab-view-users" class="tab-view glass user-inspector-view">
+      <div class="section-header">
+        <h2>👥 User Directory & Running Statistics</h2>
+        <button id="refresh-users-btn" class="btn-primary">Refresh Directory</button>
+      </div>
+      <div class="table-container">
+        <table class="user-table">
+          <thead>
+            <tr>
+              <th>User</th>
+              <th>Email</th>
+              <th>Class</th>
+              <th>Map Color</th>
+              <th>Runs</th>
+              <th>Distance (km)</th>
+              <th>Territory (sqm)</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="user-table-body">
+            <tr>
+              <td colspan="8" class="text-center">Loading users directory...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </main>
+
+    <!-- View: Push Broadcaster -->
+    <main id="tab-view-push" class="tab-view glass push-broadcaster-view">
+      <div class="form-container">
+        <h2>📢 Push Notification Broadcast Center</h2>
+        <p class="description">Broadcast custom system notifications to all testers currently registered with Expo push tokens.</p>
+        <div class="form-group-block">
+          <div class="form-group">
+            <label for="push-title">Notification Title</label>
+            <input type="text" id="push-title" placeholder="e.g. ⚔️ Territory Battle Alert" />
+          </div>
+          <div class="form-group">
+            <label for="push-body">Message Body</label>
+            <textarea id="push-body" rows="4" placeholder="e.g. Weekend Conquest Event is now live! Claim zones to double your distance."></textarea>
+          </div>
+          <button id="send-push-btn" class="btn-primary btn-large">Send Broadcast Message</button>
+        </div>
+      </div>
+    </main>
   </div>
 
   <!-- Socket.io and Leaflet JS libraries -->
   <script src="/socket.io/socket.io.js"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <!-- Leaflet Heatmap Plugin -->
+  <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
   <!-- Main Script -->
   <script src="app.js"></script>
 </body>
