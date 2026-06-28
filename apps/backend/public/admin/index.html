@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RunWars Live Admin Operations Panel</title>
+  <!-- Google Fonts & Leaflet Map CSS -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <!-- Custom Styling -->
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Authentication Modal -->
+  <div id="auth-modal" class="modal-overlay">
+    <div class="modal-card">
+      <h2>🛡️ Admin Access Verification</h2>
+      <p>Please enter the RunWars administration secret key to proceed.</p>
+      <input type="password" id="admin-secret-input" placeholder="Enter Secret Key..." />
+      <button id="auth-submit-btn">Verify Access</button>
+      <div id="auth-error-msg" class="error-msg"></div>
+    </div>
+  </div>
+
+  <div class="app-container">
+    <!-- Header -->
+    <header class="main-header">
+      <div class="logo-area">
+        <h1>RunWars <span>Admin Ops</span></h1>
+      </div>
+      <div class="system-status">
+        <div class="status-badge" id="db-status"><span class="indicator red"></span> DB: Checking...</div>
+        <div class="status-badge" id="uptime-status">Uptime: 00:00:00</div>
+        <button id="logout-btn" class="btn-secondary">Lock Panel</button>
+      </div>
+    </header>
+
+    <!-- Metrics Summary -->
+    <section class="metrics-grid">
+      <div class="metric-card glass">
+        <h3>Live Connections</h3>
+        <div class="metric-value" id="val-sockets">0</div>
+        <p>Active web sockets</p>
+      </div>
+      <div class="metric-card glass">
+        <h3>Total Registered Users</h3>
+        <div class="metric-value" id="val-users">0</div>
+        <p>In Supabase DB</p>
+      </div>
+      <div class="metric-card glass">
+        <h3>Claimed Zones</h3>
+        <div class="metric-value" id="val-territories">0</div>
+        <p>Active polygons</p>
+      </div>
+    </section>
+
+    <!-- Main Live Operations Dashboard -->
+    <main class="ops-dashboard">
+      <!-- Left Column: Map -->
+      <section class="map-section glass">
+        <div class="section-header">
+          <h2>🗺️ Live Map Tracking</h2>
+          <span class="pulse-icon"></span>
+        </div>
+        <div id="map"></div>
+      </section>
+
+      <!-- Right Column: Controls & Logs -->
+      <section class="side-panel">
+        <!-- Control Actions -->
+        <div class="control-box glass">
+          <h2>⚡ System Commands</h2>
+          <div class="btn-group">
+            <button id="refresh-stats-btn" class="btn-primary">Refresh Metrics</button>
+            <button id="reset-grid-btn" class="btn-danger">Reset Map Grid</button>
+          </div>
+        </div>
+
+        <!-- Terminal Logs -->
+        <div class="log-box glass">
+          <div class="section-header">
+            <h2>📜 Real-time System Stream</h2>
+            <button id="clear-logs-btn" class="btn-clear">Clear</button>
+          </div>
+          <div id="terminal-log" class="terminal">
+            <div class="log-line system">[System] Listening for operations events...</div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Socket.io and Leaflet JS libraries -->
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <!-- Main Script -->
+  <script src="app.js"></script>
+</body>
+</html>

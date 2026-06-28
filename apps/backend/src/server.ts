@@ -4,6 +4,7 @@ import { Server, Socket } from 'socket.io';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import morgan from 'morgan';
+import path from 'path';
 import { Pool } from 'pg';
 import {
   LivePlayerState,
@@ -22,6 +23,7 @@ app.use(cors());
 app.use(morgan('dev'));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+app.use('/admin', express.static(path.join(__dirname, '../public/admin')));
 
 const server = http.createServer(app);
 
@@ -538,6 +540,59 @@ app.get('/runs/details/:runId', async (req, res) => {
   } catch (err: any) {
     console.error('[API] /runs/details error:', err.message);
     res.status(500).json({ error: 'Failed to load run details' });
+  }
+});
+
+// --- Admin Monitoring Panel Endpoints ---
+const adminAuthMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  const token = req.headers['x-admin-token'];
+  const secret = process.env.ADMIN_SECRET_KEY || 'default_admin_secret_key_change_me';
+  if (token === secret) {
+    next();
+  } else {
+    res.status(401).json({ error: 'Unauthorized' });
+  }
+};
+
+app.get('/api/admin/stats', adminAuthMiddleware, async (req, res) => {
+  try {
+    const usersRes = await pool.query('SELECT COUNT(*)::int AS count FROM users');
+    const runsRes = await pool.query('SELECT COUNT(*)::int AS count FROM runs');
+    const territoriesRes = await pool.query('SELECT COUNT(*)::int AS count FROM territories');
+    res.json({
+      status: 'ok',
+      uptime: Math.floor(process.uptime()),
+      activeSockets: io.sockets.sockets.size,
+      usersCount: usersRes.rows[0].count,
+      runsCount: runsRes.rows[0].count,
+      territoriesCount: territoriesRes.rows[0].count,
+      dbConnected: pool.totalCount > 0,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/admin/territory/:id', adminAuthMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query('DELETE FROM territories WHERE id = $1', [id]);
+    territoriesCache.delete(id);
+    io.emit('territoriesUpdate', Array.from(territoriesCache.values()));
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/reset-grid', adminAuthMiddleware, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM territories');
+    territoriesCache.clear();
+    io.emit('territoriesUpdate', []);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 

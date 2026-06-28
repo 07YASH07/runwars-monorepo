@@ -1,0 +1,380 @@
+/* RunWars Admin Dashboard CSS */
+
+:root {
+  --bg-color: #0b0f19;
+  --panel-bg: rgba(17, 24, 39, 0.7);
+  --border-color: rgba(255, 255, 255, 0.08);
+  --text-primary: #f3f4f6;
+  --text-secondary: #9ca3af;
+  --primary-accent: #00e5ff;
+  --secondary-accent: #3b82f6;
+  --danger-color: #ff3b30;
+  --success-color: #34c759;
+  --font-stack: 'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--bg-color);
+  color: var(--text-primary);
+  font-family: var(--font-stack);
+  overflow-x: hidden;
+  height: 100vh;
+}
+
+/* Glassmorphism utility card */
+.glass {
+  background: var(--panel-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+  transition: transform 0.2s ease, border-color 0.2s ease;
+}
+
+.glass:hover {
+  border-color: rgba(0, 229, 255, 0.3);
+}
+
+/* App layout wrapper */
+.app-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  padding: 20px;
+  gap: 20px;
+}
+
+/* Header design */
+.main-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 20px;
+  background: rgba(17, 24, 39, 0.5);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+}
+
+.logo-area h1 {
+  font-size: 24px;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: 0.5px;
+}
+
+.logo-area h1 span {
+  font-weight: 300;
+  color: var(--primary-accent);
+}
+
+.system-status {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+
+.status-badge {
+  background: rgba(0, 0, 0, 0.3);
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border-color);
+}
+
+.indicator {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.indicator.red { background-color: var(--danger-color); box-shadow: 0 0 8px var(--danger-color); }
+.indicator.green { background-color: var(--success-color); box-shadow: 0 0 8px var(--success-color); }
+
+/* Metrics Summary Row */
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 20px;
+}
+
+.metric-card {
+  padding: 20px;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.metric-card h3 {
+  font-size: 14px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  margin-bottom: 8px;
+  letter-spacing: 0.5px;
+}
+
+.metric-value {
+  font-size: 38px;
+  font-weight: 700;
+  color: #fff;
+  margin-bottom: 4px;
+  text-shadow: 0 0 10px rgba(0, 229, 255, 0.1);
+}
+
+.metric-card p {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* Dashboard Content Grid */
+.ops-dashboard {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 20px;
+  flex: 1;
+  min-height: 0; /* Important for scroll sizing */
+}
+
+/* Map frame */
+.map-section {
+  display: flex;
+  flex-direction: column;
+  padding: 15px;
+  min-height: 0;
+}
+
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.section-header h2 {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.pulse-icon {
+  width: 8px;
+  height: 8px;
+  background-color: var(--primary-accent);
+  border-radius: 50%;
+  animation: pulse 1.5s infinite;
+}
+
+#map {
+  flex: 1;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: #111b27;
+}
+
+/* Side actions & terminal logs */
+.side-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-height: 0;
+}
+
+.control-box {
+  padding: 15px;
+}
+
+.control-box h2 {
+  font-size: 15px;
+  margin-bottom: 12px;
+  color: var(--text-secondary);
+}
+
+.btn-group {
+  display: flex;
+  gap: 10px;
+}
+
+/* Scrollable terminal panel */
+.log-box {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 15px;
+  min-height: 0;
+}
+
+.terminal {
+  flex: 1;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 12px;
+  font-family: monospace;
+  font-size: 12px;
+  overflow-y: auto;
+  line-height: 1.6;
+}
+
+.log-line {
+  margin-bottom: 6px;
+  color: var(--text-secondary);
+}
+
+.log-line.system { color: #818cf8; }
+.log-line.join { color: var(--primary-accent); }
+.log-line.claim { color: #f59e0b; }
+.log-line.battle { color: #f43f5e; font-weight: bold; }
+.log-line.leave { color: #6b7280; }
+
+/* Buttons styling */
+button {
+  font-family: var(--font-stack);
+  font-weight: 600;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 16px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 13px;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, var(--primary-accent), var(--secondary-accent));
+  color: #0b0f19;
+}
+
+.btn-primary:hover {
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+
+.btn-secondary {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+}
+
+.btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.btn-danger {
+  background: var(--danger-color);
+  color: #fff;
+}
+
+.btn-danger:hover {
+  background: #e02424;
+  transform: translateY(-1px);
+  box-shadow: 0 0 10px rgba(255, 59, 48, 0.3);
+}
+
+.btn-clear {
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  padding: 2px 6px;
+}
+
+.btn-clear:hover {
+  color: #fff;
+}
+
+/* Authentication overlay */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(11, 15, 25, 0.85);
+  backdrop-filter: blur(8px);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 9999;
+}
+
+.modal-card {
+  background: #111827;
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  padding: 30px;
+  width: 90%;
+  max-width: 400px;
+  text-align: center;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+}
+
+.modal-card h2 {
+  font-size: 20px;
+  margin-bottom: 10px;
+}
+
+.modal-card p {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin-bottom: 20px;
+}
+
+.modal-card input {
+  width: 100%;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: rgba(0, 0, 0, 0.3);
+  color: #fff;
+  font-size: 14px;
+  text-align: center;
+  margin-bottom: 15px;
+  font-family: inherit;
+}
+
+.modal-card input:focus {
+  outline: none;
+  border-color: var(--primary-accent);
+}
+
+.modal-card button {
+  width: 100%;
+  padding: 12px;
+  background: linear-gradient(135deg, var(--primary-accent), var(--secondary-accent));
+  color: #0b0f19;
+  font-size: 14px;
+}
+
+.error-msg {
+  color: var(--danger-color);
+  font-size: 13px;
+  margin-top: 10px;
+  height: 20px;
+}
+
+/* Map marker popups styling override */
+.leaflet-popup-content-wrapper {
+  background: var(--bg-color) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--border-color);
+  font-family: var(--font-stack);
+  font-size: 12px;
+}
+
+.leaflet-popup-tip {
+  background: var(--bg-color) !important;
+}
+
+/* Animations */
+@keyframes pulse {
+  0% { transform: scale(0.9); opacity: 0.5; }
+  50% { transform: scale(1.1); opacity: 1; }
+  100% { transform: scale(0.9); opacity: 0.5; }
+}
