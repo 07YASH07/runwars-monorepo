@@ -613,6 +613,19 @@ app.post('/api/admin/broadcast-push', adminAuthMiddleware, async (req, res) => {
   }
 });
 
+app.post('/api/admin/push-single', adminAuthMiddleware, async (req, res) => {
+  try {
+    const { token, title, body } = req.body;
+    if (!token || !title || !body) {
+      return res.status(400).json({ error: 'token, title, and body are required' });
+    }
+    await sendPushNotification(token, title, body);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/admin/users', adminAuthMiddleware, async (req, res) => {
   try {
     const result = await pool.query(`
@@ -627,7 +640,11 @@ app.get('/api/admin/users', adminAuthMiddleware, async (req, res) => {
       GROUP BY u.id
       ORDER BY u.created_at DESC
     `);
-    res.json(result.rows);
+    const rows = result.rows.map(row => ({
+      ...row,
+      push_token: pushTokens.get(row.id) || null
+    }));
+    res.json(rows);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

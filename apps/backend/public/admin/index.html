@@ -59,6 +59,27 @@
     </div>
   </div>
 
+  <!-- DM Single User Modal -->
+  <div id="dm-user-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-card edit-card">
+      <h2>📨 Send Notification to User</h2>
+      <p id="dm-user-label" style="color:var(--accent);font-weight:600;"></p>
+      <input type="hidden" id="dm-user-token" />
+      <div class="form-group">
+        <label for="dm-push-title">Notification Title</label>
+        <input type="text" id="dm-push-title" placeholder="e.g. You have a new challenge!" />
+      </div>
+      <div class="form-group">
+        <label for="dm-push-body">Message Body</label>
+        <textarea id="dm-push-body" rows="3" placeholder="Personal message..."></textarea>
+      </div>
+      <div class="modal-action-buttons">
+        <button id="dm-send-btn" class="btn-primary">Send Notification</button>
+        <button id="dm-cancel-btn" class="btn-secondary">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <div class="app-container">
 
     <!-- ===== HEADER ===== -->
@@ -198,28 +219,40 @@
 
     <!-- ===== TAB VIEW: USER INSPECTOR ===== -->
     <main id="tab-view-users" class="tab-view panel glass user-inspector-view">
-      <div class="panel-header">
-        <div class="panel-title">👥 User Directory &amp; Running Statistics</div>
-        <button id="refresh-users-btn" class="btn-primary">Refresh Directory</button>
+      <!-- Toolbar -->
+      <div class="user-toolbar">
+        <div class="user-toolbar-left">
+          <input type="text" id="user-search" class="toolbar-input" placeholder="🔍 Search by name or email..." />
+          <select id="user-class-filter" class="toolbar-select">
+            <option value="">All Classes</option>
+            <option value="Runner">Runner</option>
+            <option value="Knight">Knight</option>
+            <option value="Ninja">Ninja</option>
+            <option value="Cyber">Cyber</option>
+          </select>
+        </div>
+        <div class="user-toolbar-right">
+          <button id="export-csv-btn" class="btn-secondary">⬇ Export CSV</button>
+          <button id="refresh-users-btn" class="btn-primary">Refresh</button>
+        </div>
       </div>
+      <!-- Table -->
       <div class="table-container">
         <table class="user-table">
           <thead>
             <tr>
               <th>User</th>
               <th>Email</th>
-              <th>Class</th>
+              <th class="sortable" data-col="character_type">Class <span class="sort-icon">↕</span></th>
               <th>Map Color</th>
-              <th>Runs</th>
-              <th>Distance (km)</th>
-              <th>Territory (sqm)</th>
+              <th class="sortable" data-col="total_runs">Runs <span class="sort-icon">↕</span></th>
+              <th class="sortable" data-col="total_distance">Distance <span class="sort-icon">↕</span></th>
+              <th class="sortable" data-col="total_territory">Territory <span class="sort-icon">↕</span></th>
               <th>Actions</th>
             </tr>
           </thead>
           <tbody id="user-table-body">
-            <tr>
-              <td colspan="8" class="text-center">Loading users directory...</td>
-            </tr>
+            <tr><td colspan="8" class="text-center">Loading users directory...</td></tr>
           </tbody>
         </table>
       </div>

@@ -286,6 +286,8 @@ function startUptimeCounter() {
 }
 
 // Fetch Users Directory
+let currentSort = { col: null, dir: 'asc' };
+
 async function fetchUsers() {
   const token = getAdminToken();
   if (!token) return;
@@ -293,59 +295,172 @@ async function fetchUsers() {
   userTableBody.innerHTML = '<tr><td colspan="8" class="text-center">Loading users directory...</td></tr>';
 
   try {
-    const res = await fetch('/api/admin/users', {
-      headers: { 'x-admin-token': token }
-    });
-
+    const res = await fetch('/api/admin/users', { headers: { 'x-admin-token': token } });
     if (!res.ok) throw new Error('Failed to load users');
-
-    const users = await res.json();
-    allUsersData = users;
-    
-    if (users.length === 0) {
-      userTableBody.innerHTML = '<tr><td colspan="8" class="text-center">No users registered in database.</td></tr>';
-      return;
-    }
-
-    userTableBody.innerHTML = '';
-    users.forEach(u => {
-      const tr = document.createElement('tr');
-      const distKm = (u.total_distance / 1000).toFixed(2);
-      const color = u.color || '#3b82f6';
-      const classNameBadge = (u.character_type || 'Runner').toLowerCase();
-      
-      tr.innerHTML = `
-        <td><strong>${u.display_name || 'Runner'}</strong><br><small style="color:var(--text-secondary)">ID: ${u.id.substring(0, 8)}...</small></td>
-        <td>${u.email || 'No email'}</td>
-        <td><span class="badge ${classNameBadge}">${u.character_type || 'Runner'}</span></td>
-        <td>
-          <div class="color-preview">
-            <span class="color-dot" style="background-color:${color}"></span>
-            ${color}
-          </div>
-        </td>
-        <td>${u.total_runs}</td>
-        <td>${distKm} km</td>
-        <td>${u.total_territory.toFixed(0)} sqm</td>
-        <td>
-          <button class="btn-secondary btn-sm edit-user-trigger" data-id="${u.id}">Edit</button>
-        </td>
-      `;
-      userTableBody.appendChild(tr);
-    });
-
-    // Hook up trigger buttons
-    document.querySelectorAll('.edit-user-trigger').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        const uid = e.target.getAttribute('data-id');
-        openEditUserModal(uid);
-      });
-    });
-
+    allUsersData = await res.json();
+    renderUserTable();
   } catch (err) {
     userTableBody.innerHTML = `<tr><td colspan="8" class="text-center error-msg">Error: ${err.message}</td></tr>`;
   }
 }
+
+function renderUserTable() {
+  const searchVal   = (document.getElementById('user-search')?.value || '').toLowerCase();
+  const classFilter = document.getElementById('user-class-filter')?.value || '';
+
+  let filtered = allUsersData.filter(u => {
+    const nameMatch  = (u.display_name || '').toLowerCase().includes(searchVal);
+    const emailMatch = (u.email || '').toLowerCase().includes(searchVal);
+    const classMatch = !classFilter || (u.character_type || '') === classFilter;
+    return (nameMatch || emailMatch) && classMatch;
+  });
+
+  if (currentSort.col) {
+    filtered.sort((a, b) => {
+      let va = a[currentSort.col];
+      let vb = b[currentSort.col];
+      if (typeof va === 'string') va = va.toLowerCase();
+      if (typeof vb === 'string') vb = vb.toLowerCase();
+      if (va < vb) return currentSort.dir === 'asc' ? -1 : 1;
+      if (va > vb) return currentSort.dir === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }
+
+  if (filtered.length === 0) {
+    userTableBody.innerHTML = '<tr><td colspan="8" class="text-center">No users match your filter.</td></tr>';
+    return;
+  }
+
+  userTableBody.innerHTML = '';
+  filtered.forEach(u => {
+    const tr = document.createElement('tr');
+    const distKm = (u.total_distance / 1000).toFixed(2);
+    const color = u.color || '#3b82f6';
+    const cls = (u.character_type || 'Runner').toLowerCase();
+    const hasToken = !!u.push_token;
+
+    tr.innerHTML = `
+      <td><strong>${u.display_name || 'Runner'}</strong><br><small style="color:var(--muted)">ID: ${u.id.substring(0, 8)}...</small></td>
+      <td>${u.email || 'No email'}</td>
+      <td><span class="badge ${cls}">${u.character_type || 'Runner'}</span></td>
+      <td><div class="color-preview"><span class="color-dot" style="background:${color}"></span>${color}</div></td>
+      <td>${u.total_runs}</td>
+      <td>${distKm} km</td>
+      <td>${u.total_territory.toFixed(0)} sqm</td>
+      <td style="display:flex;gap:6px;align-items:center;">
+        <button class="btn-secondary btn-sm edit-user-trigger" data-id="${u.id}">Edit</button>
+        <button class="btn-primary btn-sm dm-user-trigger" data-id="${u.id}" ${!hasToken ? 'disabled title="No push token registered"' : ''} style="opacity:${hasToken ? 1 : 0.4}">📨</button>
+      </td>
+    `;
+    userTableBody.appendChild(tr);
+  });
+
+  document.querySelectorAll('.edit-user-trigger').forEach(btn => {
+    btn.addEventListener('click', e => openEditUserModal(e.target.getAttribute('data-id')));
+  });
+  document.querySelectorAll('.dm-user-trigger').forEach(btn => {
+    btn.addEventListener('click', e => openDmModal(e.target.getAttribute('data-id')));
+  });
+}
+
+// Sort column click handler
+document.addEventListener('click', e => {
+  const th = e.target.closest('th.sortable');
+  if (!th) return;
+  const col = th.getAttribute('data-col');
+  if (currentSort.col === col) {
+    currentSort.dir = currentSort.dir === 'asc' ? 'desc' : 'asc';
+  } else {
+    currentSort.col = col;
+    currentSort.dir = 'desc';
+  }
+  document.querySelectorAll('th.sortable').forEach(h => h.classList.remove('sort-asc', 'sort-desc'));
+  th.classList.add(currentSort.dir === 'asc' ? 'sort-asc' : 'sort-desc');
+  renderUserTable();
+});
+
+// CSV Export
+function exportUsersCSV() {
+  if (!allUsersData.length) return;
+  const headers = ['Name','Email','Class','Color','Runs','Distance_km','Territory_sqm'];
+  const rows = allUsersData.map(u => [
+    `"${u.display_name || ''}"`,
+    `"${u.email || ''}"`,
+    u.character_type || '',
+    u.color || '',
+    u.total_runs,
+    (u.total_distance / 1000).toFixed(2),
+    u.total_territory.toFixed(0)
+  ]);
+  const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url  = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `runwars_users_${new Date().toISOString().split('T')[0]}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  writeLog('User data exported as CSV.', 'system');
+}
+
+// DM Single User Modal
+const dmUserModal  = document.getElementById('dm-user-modal');
+const dmUserLabel  = document.getElementById('dm-user-label');
+const dmUserToken  = document.getElementById('dm-user-token');
+const dmPushTitle  = document.getElementById('dm-push-title');
+const dmPushBody   = document.getElementById('dm-push-body');
+const dmSendBtn    = document.getElementById('dm-send-btn');
+const dmCancelBtn  = document.getElementById('dm-cancel-btn');
+
+function openDmModal(userId) {
+  const user = allUsersData.find(u => u.id === userId);
+  if (!user || !user.push_token) return;
+  dmUserLabel.innerText = `To: ${user.display_name || user.email}`;
+  dmUserToken.value = user.push_token;
+  dmPushTitle.value = '';
+  dmPushBody.value = '';
+  dmUserModal.style.display = 'flex';
+}
+
+async function sendDmPush() {
+  const token = getAdminToken();
+  const payload = {
+    token: dmUserToken.value,
+    title: dmPushTitle.value.trim(),
+    body:  dmPushBody.value.trim()
+  };
+  if (!payload.title || !payload.body) {
+    alert('Please fill out the title and message body.');
+    return;
+  }
+  dmSendBtn.disabled = true;
+  dmSendBtn.innerText = 'Sending...';
+  try {
+    const res = await fetch('/api/admin/push-single', {
+      method: 'POST',
+      headers: { 'x-admin-token': token, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (res.ok) {
+      writeLog(`Direct push sent: "${payload.title}" to ${dmUserLabel.innerText}`, 'system');
+      dmUserModal.style.display = 'none';
+    } else {
+      const err = await res.json();
+      alert(`Failed: ${err.error}`);
+    }
+  } catch (err) {
+    alert(`Error: ${err.message}`);
+  } finally {
+    dmSendBtn.disabled = false;
+    dmSendBtn.innerText = 'Send Notification';
+  }
+}
+
+dmSendBtn.addEventListener('click', sendDmPush);
+dmCancelBtn.addEventListener('click', () => { dmUserModal.style.display = 'none'; });
+
+
 
 // User Modal Operations
 function openEditUserModal(userId) {
@@ -794,11 +909,14 @@ heatmapToggle.addEventListener('change', (e) => {
 
 // User table actions
 refreshUsersBtn.addEventListener('click', fetchUsers);
-cancelUserBtn.addEventListener('click', () => {
-  editUserModal.style.display = 'none';
-});
+cancelUserBtn.addEventListener('click', () => { editUserModal.style.display = 'none'; });
 saveUserBtn.addEventListener('click', saveUserDetails);
 deleteUserBtn.addEventListener('click', deleteUser);
+
+// Phase 2: Search / Filter / Export
+document.getElementById('user-search').addEventListener('input', renderUserTable);
+document.getElementById('user-class-filter').addEventListener('change', renderUserTable);
+document.getElementById('export-csv-btn').addEventListener('click', exportUsersCSV);
 
 // Push Broadcaster action
 sendPushBtn.addEventListener('click', sendPushBroadcast);
