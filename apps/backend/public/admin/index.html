@@ -68,6 +68,7 @@
       </div>
       <nav class="tab-navigation">
         <button class="tab-btn active" data-tab="dashboard">📊 Dashboard</button>
+        <button class="tab-btn" data-tab="analytics">📈 Analytics</button>
         <button class="tab-btn" data-tab="users">👥 User Inspector</button>
         <button class="tab-btn" data-tab="push">📢 Push Broadcaster</button>
       </nav>
@@ -136,6 +137,63 @@
         </div>
       </section>
 
+    </main>
+
+    <!-- ===== TAB VIEW: ANALYTICS ===== -->
+    <main id="tab-view-analytics" class="tab-view">
+
+      <!-- Row 1: Three line/bar charts -->
+      <div class="charts-row">
+        <section class="panel glass chart-panel">
+          <div class="panel-header">
+            <div class="panel-title">👟 Daily Active Runners</div>
+            <span class="chart-range">Last 7 days</span>
+          </div>
+          <div class="chart-body"><canvas id="chart-dau"></canvas></div>
+        </section>
+
+        <section class="panel glass chart-panel">
+          <div class="panel-header">
+            <div class="panel-title">🏃 Runs Per Day</div>
+            <span class="chart-range">Last 7 days</span>
+          </div>
+          <div class="chart-body"><canvas id="chart-runs"></canvas></div>
+        </section>
+
+        <section class="panel glass chart-panel">
+          <div class="panel-header">
+            <div class="panel-title">🗺️ Zones Claimed Per Day</div>
+            <span class="chart-range">Last 7 days</span>
+          </div>
+          <div class="chart-body"><canvas id="chart-zones"></canvas></div>
+        </section>
+      </div>
+
+      <!-- Row 2: Doughnut + two leaderboards -->
+      <div class="analytics-bottom-row">
+
+        <section class="panel glass chart-panel doughnut-panel">
+          <div class="panel-header">
+            <div class="panel-title">🎭 Character Class Distribution</div>
+          </div>
+          <div class="chart-body doughnut-body"><canvas id="chart-classes"></canvas></div>
+        </section>
+
+        <section class="panel glass leaderboard-panel">
+          <div class="panel-header">
+            <div class="panel-title">🏆 Top Runners by Distance</div>
+          </div>
+          <ol class="leaderboard-list" id="lb-distance"></ol>
+        </section>
+
+        <section class="panel glass leaderboard-panel">
+          <div class="panel-header">
+            <div class="panel-title">🗺️ Top Runners by Territory</div>
+          </div>
+          <ol class="leaderboard-list" id="lb-territory"></ol>
+        </section>
+
+      </div>
     </main>
 
     <!-- ===== TAB VIEW: USER INSPECTOR ===== -->
@@ -210,9 +268,8 @@
   <!-- Socket.io and Leaflet JS libraries -->
   <script src="/socket.io/socket.io.js"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-  <!-- Leaflet Heatmap Plugin -->
   <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
-  <!-- Main Script -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

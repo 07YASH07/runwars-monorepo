@@ -356,6 +356,123 @@ html, body {
 .tips-list li strong { color: var(--text); }
 
 /* =============================================
+   ANALYTICS TAB
+   ============================================= */
+
+/* Top row: 3 charts side by side */
+.charts-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+}
+
+/* Bottom row: doughnut + 2 leaderboards */
+.analytics-bottom-row {
+  display: grid;
+  grid-template-columns: 1fr 1.2fr 1.2fr;
+  gap: 14px;
+}
+
+.chart-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.chart-body {
+  padding: 16px;
+  flex: 1;
+  position: relative;
+  min-height: 0;
+}
+
+.doughnut-body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.doughnut-body canvas {
+  max-width: 200px;
+  max-height: 200px;
+}
+
+.chart-range {
+  font-size: 11px;
+  color: var(--muted);
+  background: rgba(255,255,255,0.05);
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
+/* Leaderboard list */
+.leaderboard-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.leaderboard-list {
+  list-style: none;
+  padding: 10px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.lb-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.lb-item:hover {
+  border-color: var(--border-glow);
+  background: rgba(0,229,255,0.04);
+}
+
+.lb-rank {
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--muted);
+  min-width: 28px;
+  text-align: center;
+}
+
+.lb-rank.gold   { color: #f59e0b; text-shadow: 0 0 8px rgba(245,158,11,0.4); }
+.lb-rank.silver { color: #94a3b8; }
+.lb-rank.bronze { color: #b45309; }
+
+.lb-color-dot {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.2);
+  flex-shrink: 0;
+}
+
+.lb-info { flex: 1; min-width: 0; }
+.lb-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lb-sub  { font-size: 11px; color: var(--muted); margin-top: 1px; }
+
+.lb-value {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+
+
+/* =============================================
    FORMS
    ============================================= */
 .form-group { display: flex; flex-direction: column; gap: 7px; }

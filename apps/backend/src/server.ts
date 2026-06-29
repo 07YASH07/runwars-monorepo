@@ -694,6 +694,72 @@ app.get('/api/admin/heatmap', adminAuthMiddleware, async (req, res) => {
   }
 });
 
+app.get('/api/admin/analytics', adminAuthMiddleware, async (req, res) => {
+  try {
+    // Last 7 days — daily active users (distinct users who had a run)
+    const dauResult = await pool.query(`
+      SELECT DATE(created_at) as day, COUNT(DISTINCT user_id)::int as count
+      FROM runs
+      WHERE created_at >= NOW() - INTERVAL '7 days'
+      GROUP BY day ORDER BY day ASC
+    `);
+
+    // Last 7 days — runs per day
+    const runsResult = await pool.query(`
+      SELECT DATE(created_at) as day, COUNT(*)::int as count
+      FROM runs
+      WHERE created_at >= NOW() - INTERVAL '7 days'
+      GROUP BY day ORDER BY day ASC
+    `);
+
+    // Last 7 days — territories claimed per day
+    const zonesResult = await pool.query(`
+      SELECT DATE(claimed_at) as day, COUNT(*)::int as count
+      FROM territories
+      WHERE claimed_at >= NOW() - INTERVAL '7 days'
+      GROUP BY day ORDER BY day ASC
+    `);
+
+    // Character class distribution
+    const classResult = await pool.query(`
+      SELECT character_type, COUNT(*)::int as count
+      FROM users
+      GROUP BY character_type
+    `);
+
+    // Top 5 players by total distance
+    const topDistResult = await pool.query(`
+      SELECT u.display_name, u.character_type, u.color,
+             COALESCE(SUM(r.distance_meters), 0)::float AS total_distance,
+             COUNT(r.id)::int AS total_runs
+      FROM users u
+      LEFT JOIN runs r ON r.user_id = u.id
+      GROUP BY u.id ORDER BY total_distance DESC LIMIT 5
+    `);
+
+    // Top 5 players by territory
+    const topTerritoryResult = await pool.query(`
+      SELECT u.display_name, u.character_type, u.color,
+             COALESCE(SUM(t.area_square_meters), 0)::float AS total_territory
+      FROM users u
+      LEFT JOIN territories t ON t.owner_id = u.id
+      GROUP BY u.id ORDER BY total_territory DESC LIMIT 5
+    `);
+
+    res.json({
+      dau: dauResult.rows,
+      runsPerDay: runsResult.rows,
+      zonesPerDay: zonesResult.rows,
+      classDistribution: classResult.rows,
+      topByDistance: topDistResult.rows,
+      topByTerritory: topTerritoryResult.rows
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
 const PORT = process.env.PORT || 3000;
 
 server.listen(PORT, () => {

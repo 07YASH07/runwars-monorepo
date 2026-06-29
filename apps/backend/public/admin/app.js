@@ -9,6 +9,14 @@ let serverUptimeSeconds = 0;
 let uptimeInterval;
 let allUsersData = [];
 
+// Chart.js instances
+let chartDau = null;
+let chartRuns = null;
+let chartZones = null;
+let chartClasses = null;
+let analyticsLoaded = false;
+
+
 // DOM Elements
 const authModal = document.getElementById('auth-modal');
 const secretInput = document.getElementById('admin-secret-input');
@@ -54,7 +62,153 @@ const pushTitle = document.getElementById('push-title');
 const pushBody = document.getElementById('push-body');
 const sendPushBtn = document.getElementById('send-push-btn');
 
+// =============================================
+// ANALYTICS — Chart.js + Leaderboards
+// =============================================
+
+function buildChartDefaults() {
+  return {
+    responsive: true,
+    maintainAspectRatio: true,
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: '#0f1628',
+        borderColor: 'rgba(255,255,255,0.1)',
+        borderWidth: 1,
+        titleColor: '#f1f5f9',
+        bodyColor: '#64748b'
+      }
+    },
+    scales: {
+      x: { ticks: { color: '#64748b', font: { size: 11 } }, grid: { color: 'rgba(255,255,255,0.04)' } },
+      y: { ticks: { color: '#64748b', font: { size: 11 }, precision: 0 }, grid: { color: 'rgba(255,255,255,0.04)' }, beginAtZero: true }
+    }
+  };
+}
+
+function fillMissingDays(data) {
+  const result = [];
+  const today = new Date();
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const dayStr = d.toISOString().split('T')[0];
+    const found = data.find(r => r.day && r.day.startsWith(dayStr));
+    result.push({ day: dayStr, count: found ? found.count : 0 });
+  }
+  return result;
+}
+
+function shortDay(dayStr) {
+  const d = new Date(dayStr + 'T00:00:00');
+  return d.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric' });
+}
+
+function createLineChart(canvasId, data, color, label) {
+  const filled = fillMissingDays(data);
+  const labels = filled.map(r => shortDay(r.day));
+  const values = filled.map(r => r.count);
+  const ctx = document.getElementById(canvasId).getContext('2d');
+  const gradient = ctx.createLinearGradient(0, 0, 0, 200);
+  gradient.addColorStop(0, color + '40');
+  gradient.addColorStop(1, color + '00');
+  return new Chart(ctx, {
+    type: 'line',
+    data: { labels, datasets: [{ label, data: values, borderColor: color, backgroundColor: gradient, borderWidth: 2, pointBackgroundColor: color, pointRadius: 4, tension: 0.4, fill: true }] },
+    options: buildChartDefaults()
+  });
+}
+
+function createBarChart(canvasId, data, color, label) {
+  const filled = fillMissingDays(data);
+  const labels = filled.map(r => shortDay(r.day));
+  const values = filled.map(r => r.count);
+  const ctx = document.getElementById(canvasId).getContext('2d');
+  return new Chart(ctx, {
+    type: 'bar',
+    data: { labels, datasets: [{ label, data: values, backgroundColor: color + '80', borderColor: color, borderWidth: 1.5, borderRadius: 6 }] },
+    options: buildChartDefaults()
+  });
+}
+
+function createDoughnutChart(canvasId, rows) {
+  const classColors = { Runner: '#3b82f6', Knight: '#f59e0b', Ninja: '#8b5cf6', Cyber: '#10b981' };
+  const labels = rows.map(r => r.character_type || 'Unknown');
+  const values = rows.map(r => r.count);
+  const colors = labels.map(l => classColors[l] || '#64748b');
+  const ctx = document.getElementById(canvasId).getContext('2d');
+  return new Chart(ctx, {
+    type: 'doughnut',
+    data: { labels, datasets: [{ data: values, backgroundColor: colors.map(c => c + 'bb'), borderColor: colors, borderWidth: 2, hoverOffset: 8 }] },
+    options: {
+      responsive: true,
+      maintainAspectRatio: true,
+      cutout: '65%',
+      plugins: {
+        legend: { display: true, position: 'bottom', labels: { color: '#94a3b8', font: { size: 11 }, padding: 12, boxWidth: 12 } },
+        tooltip: { backgroundColor: '#0f1628', borderColor: 'rgba(255,255,255,0.1)', borderWidth: 1, titleColor: '#f1f5f9', bodyColor: '#64748b' }
+      }
+    }
+  });
+}
+
+const rankSymbols = ['🥇', '🥈', '🥉', '4', '5'];
+const rankClasses = ['gold', 'silver', 'bronze', '', ''];
+
+function renderLeaderboard(listId, items, valueKey, formatFn) {
+  const el = document.getElementById(listId);
+  el.innerHTML = '';
+  if (!items || items.length === 0) {
+    el.innerHTML = '<li style="color:var(--muted);font-size:13px;padding:12px 0">No data yet.</li>';
+    return;
+  }
+  items.forEach((item, i) => {
+    const li = document.createElement('li');
+    li.className = 'lb-item';
+    li.innerHTML = `
+      <span class="lb-rank ${rankClasses[i]}">${rankSymbols[i]}</span>
+      <span class="lb-color-dot" style="background:${item.color || '#3b82f6'}"></span>
+      <div class="lb-info">
+        <div class="lb-name">${item.display_name || 'Runner'}</div>
+        <div class="lb-sub">${item.character_type || 'Runner'} &bull; ${item.total_runs || 0} runs</div>
+      </div>
+      <span class="lb-value">${formatFn(item[valueKey])}</span>
+    `;
+    el.appendChild(li);
+  });
+}
+
+async function fetchAnalytics() {
+  const token = getAdminToken();
+  if (!token) return;
+  try {
+    const res = await fetch('/api/admin/analytics', { headers: { 'x-admin-token': token } });
+    if (!res.ok) throw new Error('Failed to load analytics');
+    const data = await res.json();
+
+    if (chartDau)     { chartDau.destroy();     chartDau = null; }
+    if (chartRuns)    { chartRuns.destroy();    chartRuns = null; }
+    if (chartZones)   { chartZones.destroy();   chartZones = null; }
+    if (chartClasses) { chartClasses.destroy(); chartClasses = null; }
+
+    chartDau     = createLineChart('chart-dau',   data.dau,         '#00e5ff', 'Active Runners');
+    chartRuns    = createBarChart( 'chart-runs',   data.runsPerDay,  '#3b82f6', 'Runs');
+    chartZones   = createBarChart( 'chart-zones',  data.zonesPerDay, '#10b981', 'Zones');
+    chartClasses = createDoughnutChart('chart-classes', data.classDistribution);
+
+    renderLeaderboard('lb-distance',  data.topByDistance,  'total_distance',  v => (v/1000).toFixed(2) + ' km');
+    renderLeaderboard('lb-territory', data.topByTerritory, 'total_territory', v => v.toFixed(0) + ' sqm');
+
+    analyticsLoaded = true;
+    writeLog('Analytics charts refreshed.', 'system');
+  } catch (err) {
+    writeLog(`Analytics error: ${err.message}`, 'leave');
+  }
+}
+
 // Setup Leaflet Map
+
 function initMap() {
   map = L.map('map').setView([20.5937, 78.9629], 5);
   
@@ -598,6 +752,8 @@ function setupTabs() {
 
       if (tabName === 'users') {
         fetchUsers();
+      } else if (tabName === 'analytics') {
+        fetchAnalytics();
       } else if (tabName === 'dashboard') {
         setTimeout(() => map.invalidateSize(), 80);
       }
