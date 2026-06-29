@@ -203,12 +203,78 @@ html, body {
   gap: 8px;
 }
 
+
 /* =============================================
-   MAP PANEL
+   MAP PANEL & ZONE INSPECTOR (Phase 3)
    ============================================= */
-.map-panel {
-  height: 480px; /* fixed tall height, always visible */
+
+/* Map + Inspector side-by-side row */
+.map-inspector-row {
+  display: grid;
+  grid-template-columns: 1fr 280px;
+  gap: 14px;
+  height: 480px;
 }
+
+.map-panel {
+  height: 100%;
+  min-height: 0;
+}
+
+/* Zone Inspector Sidebar */
+.zone-inspector {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  height: 100%;
+}
+
+.zone-empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 20px;
+  text-align: center;
+}
+
+.zone-empty-icon { font-size: 36px; opacity: 0.3; }
+.zone-empty-state p { font-size: 13px; color: var(--muted); line-height: 1.5; }
+
+.zone-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.zone-detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  gap: 8px;
+}
+
+.zone-detail-label { color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; flex-shrink: 0; }
+.zone-detail-value { color: var(--text); font-weight: 600; text-align: right; word-break: break-all; }
+
+.zone-actions {
+  padding: 14px 16px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 10px;
+}
+
+/* Player trail polylines — no extra CSS needed (Leaflet handles drawing) */
+
+
 
 .map-toggles {
   display: flex;

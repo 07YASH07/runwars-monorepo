@@ -8,6 +8,11 @@ let heatmapLayer = null;
 let serverUptimeSeconds = 0;
 let uptimeInterval;
 let allUsersData = [];
+const playerTrails = new Map();     // userId -> L.polyline
+const trailPoints  = new Map();     // userId -> array of [lat,lng]
+const territoryMeta = new Map();    // id -> full territory object
+let showTrails = false;
+
 
 // Chart.js instances
 let chartDau = null;
@@ -207,8 +212,118 @@ async function fetchAnalytics() {
   }
 }
 
-// Setup Leaflet Map
+// =============================================
+// PHASE 3: ZONE INSPECTOR + PLAYER TRAILS
+// =============================================
 
+const zoneInspectorBody  = document.getElementById('zone-inspector-body');
+const zoneInspectorClose = document.getElementById('zone-inspector-close');
+const trailsToggle       = document.getElementById('trails-toggle');
+
+function showZoneInspector(territory) {
+  const t = territory;
+  const claimedDate = t.claimedAt ? new Date(t.claimedAt).toLocaleString() : 'Unknown';
+  const color = t.color || '#34c759';
+
+  zoneInspectorBody.innerHTML = `
+    <div class="zone-detail">
+      <div class="zone-detail-row">
+        <span class="zone-detail-label">Owner</span>
+        <span class="zone-detail-value">${t.ownerName || 'Unknown'}</span>
+      </div>
+      <div class="zone-detail-row">
+        <span class="zone-detail-label">Class</span>
+        <span class="zone-detail-value"><span class="badge ${(t.characterType||'runner').toLowerCase()}">${t.characterType || 'Runner'}</span></span>
+      </div>
+      <div class="zone-detail-row">
+        <span class="zone-detail-label">Color</span>
+        <span class="zone-detail-value" style="display:flex;align-items:center;gap:8px;">
+          <span style="width:12px;height:12px;border-radius:50%;background:${color};border:1px solid rgba(255,255,255,0.2);display:inline-block;"></span>${color}
+        </span>
+      </div>
+      <div class="zone-detail-row">
+        <span class="zone-detail-label">Area</span>
+        <span class="zone-detail-value">${t.areaSquareMeters ? t.areaSquareMeters.toFixed(1) + ' sqm' : 'N/A'}</span>
+      </div>
+      <div class="zone-detail-row">
+        <span class="zone-detail-label">Vertices</span>
+        <span class="zone-detail-value">${t.polygonCoordinates ? t.polygonCoordinates.length : 0} points</span>
+      </div>
+      <div class="zone-detail-row">
+        <span class="zone-detail-label">Claimed</span>
+        <span class="zone-detail-value" style="font-size:11px;">${claimedDate}</span>
+      </div>
+    </div>
+    <div class="zone-actions">
+      <button class="btn-danger btn-sm" id="zone-delete-btn" data-id="${t.id}" style="flex:1;">🗑 Delete Zone</button>
+    </div>
+  `;
+  zoneInspectorClose.style.display = 'inline-block';
+
+  document.getElementById('zone-delete-btn').addEventListener('click', async () => {
+    const confirmed = confirm(`Delete zone owned by "${t.ownerName}"?`);
+    if (!confirmed) return;
+    const token = getAdminToken();
+    try {
+      const res = await fetch(`/api/admin/territory/${t.id}`, {
+        method: 'DELETE',
+        headers: { 'x-admin-token': token }
+      });
+      if (res.ok) {
+        const poly = territoryPolygons.get(t.id);
+        if (poly) { poly.remove(); territoryPolygons.delete(t.id); }
+        territoryMeta.delete(t.id);
+        resetZoneInspector();
+        fetchStats();
+        writeLog(`Zone deleted: ${t.ownerName} (${t.areaSquareMeters?.toFixed(0)} sqm)`, 'battle');
+      }
+    } catch (err) { alert(`Error: ${err.message}`); }
+  });
+}
+
+function resetZoneInspector() {
+  zoneInspectorBody.innerHTML = `
+    <div class="zone-empty-state">
+      <div class="zone-empty-icon">🗺️</div>
+      <p>Click any territory polygon on the map to inspect it.</p>
+    </div>
+  `;
+  zoneInspectorClose.style.display = 'none';
+}
+
+function updatePlayerTrail(userId, lat, lng) {
+  if (!showTrails) return;
+  if (!trailPoints.has(userId)) trailPoints.set(userId, []);
+  const pts = trailPoints.get(userId);
+  pts.push([lat, lng]);
+
+  let line = playerTrails.get(userId);
+  const color = (playerMarkers.get(userId)?.options?.fillColor) || '#00e5ff';
+  if (line) {
+    line.setLatLngs(pts);
+  } else {
+    line = L.polyline(pts, { color, weight: 2.5, opacity: 0.7, dashArray: '4 4' }).addTo(map);
+    playerTrails.set(userId, line);
+  }
+}
+
+function clearAllTrails() {
+  for (const line of playerTrails.values()) line.remove();
+  playerTrails.clear();
+  trailPoints.clear();
+}
+
+trailsToggle.addEventListener('change', e => {
+  showTrails = e.target.checked;
+  if (!showTrails) clearAllTrails();
+  writeLog(showTrails ? 'Player trails enabled.' : 'Player trails cleared.', 'system');
+});
+
+zoneInspectorClose.addEventListener('click', resetZoneInspector);
+
+// =============================================
+// MAP INIT
+// =============================================
 function initMap() {
   map = L.map('map').setView([20.5937, 78.9629], 5);
   
@@ -686,39 +801,23 @@ function initSockets() {
   socket.on('locationUpdated', (data) => {
     const marker = playerMarkers.get(data.userId);
     const pos = [data.point.latitude, data.point.longitude];
-    
+
     if (marker) {
       marker.setLatLng(pos);
       marker.getPopup().setContent(`<strong>${marker.options.displayName}</strong><br>Speed: ${data.speedKmh.toFixed(1)} km/h<br>Status: Moving`);
     } else {
       fetchStats();
     }
+    // Phase 3: update trail
+    updatePlayerTrail(data.userId, data.point.latitude, data.point.longitude);
   });
 
   socket.on('territoriesUpdate', (territories) => {
-    for (const poly of territoryPolygons.values()) {
-      poly.remove();
-    }
+    for (const poly of territoryPolygons.values()) poly.remove();
     territoryPolygons.clear();
-
-    // Draw only if heatmap is not active
-    if (!heatmapToggle.checked) {
-      territories.forEach(drawTerritory);
-    } else {
-      // Just save references
-      territories.forEach(t => {
-        const latLngs = t.polygonCoordinates.map(c => [c.latitude, c.longitude]);
-        const color = t.color || '#34c759';
-        const poly = L.polygon(latLngs, {
-          color: color,
-          fillColor: color,
-          fillOpacity: 0.3,
-          weight: 2
-        });
-        poly.bindPopup(`<strong>Owner:</strong> ${t.ownerName}<br><strong>Area:</strong> ${t.areaSquareMeters.toFixed(1)} sqm`);
-        territoryPolygons.set(t.id, poly);
-      });
-    }
+    territoryMeta.clear();
+    resetZoneInspector();
+    territories.forEach(drawTerritory);
     valTerritories.innerText = territories.length;
   });
 
@@ -781,25 +880,30 @@ function updatePlayerMarker(p) {
 
 function drawTerritory(t) {
   if (!t.polygonCoordinates || t.polygonCoordinates.length === 0) return;
-  
+
   const latLngs = t.polygonCoordinates.map(c => [c.latitude, c.longitude]);
   const color = t.color || '#34c759';
 
   const poly = L.polygon(latLngs, {
-    color: color,
+    color,
     fillColor: color,
     fillOpacity: 0.3,
     weight: 2
   }).addTo(map);
 
-  poly.bindPopup(`
-    <strong>Owner:</strong> ${t.ownerName}<br>
-    <strong>Area:</strong> ${t.areaSquareMeters.toFixed(1)} sqm<br>
-    <strong>Claimed:</strong> ${new Date(t.claimedAt).toLocaleString()}
-  `);
+  // Store metadata for inspector
+  territoryMeta.set(t.id, t);
+
+  // Click -> open zone inspector
+  poly.on('click', () => showZoneInspector(t));
+
+  // Hover highlight
+  poly.on('mouseover', () => poly.setStyle({ fillOpacity: 0.55, weight: 3 }));
+  poly.on('mouseout',  () => poly.setStyle({ fillOpacity: 0.3,  weight: 2 }));
 
   territoryPolygons.set(t.id, poly);
 }
+
 
 // Authenticate Admin
 async function authenticate(secret) {

@@ -132,20 +132,42 @@
     <!-- ===== TAB VIEW: DASHBOARD ===== -->
     <main id="tab-view-dashboard" class="tab-view active-view">
 
-      <!-- Row 1: Map (full width) -->
-      <section class="panel glass map-panel">
-        <div class="panel-header">
-          <div class="panel-title">🗺️ Live Map Tracking</div>
-          <div class="map-toggles">
-            <label class="switch">
-              <input type="checkbox" id="heatmap-toggle">
-              <span class="slider"></span>
-            </label>
-            <span class="toggle-label">Activity Heatmap</span>
+      <!-- Row 1: Map + Zone Inspector side-by-side -->
+      <div class="map-inspector-row">
+
+        <!-- Map -->
+        <section class="panel glass map-panel">
+          <div class="panel-header">
+            <div class="panel-title">🗺️ Live Map Tracking</div>
+            <div class="map-toggles">
+              <label class="switch">
+                <input type="checkbox" id="trails-toggle">
+                <span class="slider"></span>
+              </label>
+              <span class="toggle-label">Player Trails</span>
+              <label class="switch" style="margin-left:10px;">
+                <input type="checkbox" id="heatmap-toggle">
+                <span class="slider"></span>
+              </label>
+              <span class="toggle-label">Heatmap</span>
+            </div>
           </div>
-        </div>
-        <div id="map"></div>
-      </section>
+          <div id="map"></div>
+        </section>
+
+        <!-- Zone Inspector Sidebar -->
+        <aside class="panel glass zone-inspector" id="zone-inspector">
+          <div class="panel-header">
+            <div class="panel-title">🔍 Zone Inspector</div>
+            <button id="zone-inspector-close" class="btn-clear" style="display:none;">✕ Close</button>
+          </div>
+          <div id="zone-inspector-body" class="zone-empty-state">
+            <div class="zone-empty-icon">🗺️</div>
+            <p>Click any territory polygon on the map to inspect it.</p>
+          </div>
+        </aside>
+
+      </div>
 
       <!-- Row 2: Real-time Log (full width) -->
       <section class="panel glass log-panel">

@@ -689,6 +689,18 @@ app.delete('/api/admin/user/:id', adminAuthMiddleware, async (req, res) => {
   }
 });
 
+app.delete('/api/admin/territory/:id', adminAuthMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query('DELETE FROM territories WHERE id = $1', [id]);
+    territoriesCache.delete(id);
+    io.emit('territoriesUpdate', Array.from(territoriesCache.values()));
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/admin/heatmap', adminAuthMiddleware, async (req, res) => {
   try {
     const result = await pool.query('SELECT route_points FROM runs');
