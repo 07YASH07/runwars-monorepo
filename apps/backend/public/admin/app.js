@@ -959,6 +959,61 @@ async function resetMapGrid() {
 }
 
 // Tab navigation handler
+async function fetchMonitorData() {
+  const token = getAdminToken();
+  if (!token) return;
+
+  try {
+    const healthRes = await fetch('/api/admin/health-detail', {
+      headers: { 'x-admin-token': token }
+    });
+    if (!healthRes.ok) throw new Error('Failed to load health details');
+    const health = await healthRes.json();
+
+    document.getElementById('h-heap').innerText = health.memHeapUsedMB;
+    document.getElementById('h-rss').innerText = health.memRssMB;
+    document.getElementById('h-db-latency').innerText = health.dbLatencyMs >= 0 ? `${health.dbLatencyMs} ms` : 'Offline';
+    document.getElementById('h-sockets').innerText = health.activeSockets;
+    document.getElementById('h-tokens').innerText = health.pushTokenCount;
+    document.getElementById('h-node').innerText = health.nodeVersion;
+
+    if (health.dbOk) {
+      dbStatus.innerHTML = '<span class="indicator green"></span> DB: Connected';
+    } else {
+      dbStatus.innerHTML = '<span class="indicator red"></span> DB: Disconnected';
+    }
+
+    const logsRes = await fetch('/api/admin/push-logs', {
+      headers: { 'x-admin-token': token }
+    });
+    if (!logsRes.ok) throw new Error('Failed to load push logs');
+    const logs = await logsRes.json();
+
+    const pushLogBody = document.getElementById('push-log-body');
+    if (logs.length === 0) {
+      pushLogBody.innerHTML = '<tr><td colspan="5" class="text-center">No notifications sent yet.</td></tr>';
+      return;
+    }
+
+    pushLogBody.innerHTML = '';
+    logs.forEach((log, index) => {
+      const tr = document.createElement('tr');
+      const timeStr = new Date(log.timestamp).toLocaleString();
+      tr.innerHTML = `
+        <td>${logs.length - index}</td>
+        <td><strong>${log.title}</strong></td>
+        <td>${log.body}</td>
+        <td><span class="badge runner">${log.sentCount} devices</span></td>
+        <td>${timeStr}</td>
+      `;
+      pushLogBody.appendChild(tr);
+    });
+
+  } catch (err) {
+    writeLog(`Monitor error: ${err.message}`, 'leave');
+  }
+}
+
 function setupTabs() {
   tabBtns.forEach(btn => {
     btn.addEventListener('click', () => {
@@ -975,10 +1030,13 @@ function setupTabs() {
         fetchAnalytics();
       } else if (tabName === 'dashboard') {
         setTimeout(() => map.invalidateSize(), 80);
+      } else if (tabName === 'monitor') {
+        fetchMonitorData();
       }
     });
   });
 }
+
 
 // Event Listeners
 authSubmitBtn.addEventListener('click', () => {
@@ -1024,6 +1082,10 @@ document.getElementById('export-csv-btn').addEventListener('click', exportUsersC
 
 // Push Broadcaster action
 sendPushBtn.addEventListener('click', sendPushBroadcast);
+
+// Phase 4: Monitor refresh
+document.getElementById('refresh-monitor-btn').addEventListener('click', fetchMonitorData);
+
 
 // App Startup
 window.addEventListener('load', async () => {

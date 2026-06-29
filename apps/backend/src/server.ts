@@ -53,6 +53,11 @@ const userToSocket = new Map<string, string>(); // userId -> socketId for target
 const pushTokens = new Map<string, string>();   // userId -> Expo push token
 const ongoingDbWrites = new Map<string, Promise<any>>();
 
+// In-memory push notification log (Phase 4)
+interface PushLogEntry { title: string; body: string; sentCount: number; timestamp: string; }
+const pushLog: PushLogEntry[] = [];
+
+
 // --- Bounding Box Overlap Detection (no PostGIS needed) ---
 interface BBox { minLat: number; maxLat: number; minLng: number; maxLng: number; }
 
@@ -607,6 +612,9 @@ app.post('/api/admin/broadcast-push', adminAuthMiddleware, async (req, res) => {
       await sendPushNotification(token, title, body);
       sentCount++;
     }
+    // Record in push log
+    pushLog.unshift({ title, body, sentCount, timestamp: new Date().toISOString() });
+    if (pushLog.length > 50) pushLog.pop(); // keep max 50 entries
     res.json({ success: true, sentCount });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -620,10 +628,46 @@ app.post('/api/admin/push-single', adminAuthMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'token, title, and body are required' });
     }
     await sendPushNotification(token, title, body);
+    pushLog.unshift({ title, body, sentCount: 1, timestamp: new Date().toISOString() });
+    if (pushLog.length > 50) pushLog.pop();
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// Phase 4: Push log history
+app.get('/api/admin/push-logs', adminAuthMiddleware, (req, res) => {
+  res.json(pushLog);
+});
+
+// Phase 4: Detailed health endpoint
+app.get('/api/admin/health-detail', adminAuthMiddleware, async (req, res) => {
+  const mem = process.memoryUsage();
+  const uptimeSec = Math.floor(process.uptime());
+
+  // Measure DB latency
+  let dbLatencyMs = -1;
+  let dbOk = false;
+  try {
+    const t0 = Date.now();
+    await pool.query('SELECT 1');
+    dbLatencyMs = Date.now() - t0;
+    dbOk = true;
+  } catch (_) {}
+
+  res.json({
+    uptime: uptimeSec,
+    nodeVersion: process.version,
+    memHeapUsedMB: (mem.heapUsed / 1024 / 1024).toFixed(1),
+    memHeapTotalMB: (mem.heapTotal / 1024 / 1024).toFixed(1),
+    memRssMB: (mem.rss / 1024 / 1024).toFixed(1),
+    dbLatencyMs,
+    dbOk,
+    activeSockets: livePlayers.size,
+    pushTokenCount: pushTokens.size,
+    pushLogCount: pushLog.length
+  });
 });
 
 app.get('/api/admin/users', adminAuthMiddleware, async (req, res) => {

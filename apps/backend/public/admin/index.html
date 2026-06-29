@@ -92,6 +92,7 @@
         <button class="tab-btn" data-tab="analytics">📈 Analytics</button>
         <button class="tab-btn" data-tab="users">👥 User Inspector</button>
         <button class="tab-btn" data-tab="push">📢 Push Broadcaster</button>
+        <button class="tab-btn" data-tab="monitor">🖥️ Monitor</button>
       </nav>
       <div class="system-status">
         <div class="status-badge" id="db-status"><span class="indicator red"></span> DB: Checking...</div>
@@ -314,6 +315,69 @@
           <li><strong>📊 Check count</strong> – Only users with Expo tokens registered will receive this. Uninstalled or background-off apps may not show it.</li>
           <li><strong>🕐 Best time</strong> – Send during peak evening hours (6pm–9pm) for max engagement.</li>
         </ul>
+      </section>
+
+    </main>
+
+    <!-- ===== TAB VIEW: MONITOR ===== -->
+    <main id="tab-view-monitor" class="tab-view">
+
+      <!-- Health Stats Row -->
+      <div class="health-row">
+        <div class="health-card glass">
+          <div class="health-icon">💾</div>
+          <div class="health-value" id="h-heap">—</div>
+          <div class="health-label">Heap Used (MB)</div>
+        </div>
+        <div class="health-card glass">
+          <div class="health-icon">📦</div>
+          <div class="health-value" id="h-rss">—</div>
+          <div class="health-label">RSS Memory (MB)</div>
+        </div>
+        <div class="health-card glass">
+          <div class="health-icon">⚡</div>
+          <div class="health-value" id="h-db-latency">—</div>
+          <div class="health-label">DB Latency (ms)</div>
+        </div>
+        <div class="health-card glass">
+          <div class="health-icon">🔌</div>
+          <div class="health-value" id="h-sockets">—</div>
+          <div class="health-label">Live Sockets</div>
+        </div>
+        <div class="health-card glass">
+          <div class="health-icon">📱</div>
+          <div class="health-value" id="h-tokens">—</div>
+          <div class="health-label">Push Tokens</div>
+        </div>
+        <div class="health-card glass">
+          <div class="health-icon">🟢</div>
+          <div class="health-value" id="h-node">—</div>
+          <div class="health-label">Node Version</div>
+        </div>
+      </div>
+
+      <!-- Push Log Table -->
+      <section class="panel glass">
+        <div class="panel-header">
+          <div class="panel-title">📋 Push Notification History</div>
+          <button id="refresh-monitor-btn" class="btn-primary">Refresh</button>
+        </div>
+        <div class="table-container">
+          <table class="user-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Title</th>
+                <th>Message</th>
+                <th>Sent To</th>
+                <th>Timestamp</th>
+              </tr>
+            </thead>
+            <tbody id="push-log-body">
+              <tr><td colspan="5" class="text-center">No notifications sent yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
       </section>
 
     </main>
