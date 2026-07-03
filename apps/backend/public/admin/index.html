@@ -303,17 +303,35 @@
         </button>
       </section>
 
+      <!-- Announcement Form Card -->
+      <section class="panel glass push-card">
+        <div class="panel-header">
+          <div class="panel-title">📰 Create Feed Announcement</div>
+        </div>
+        <p class="push-desc">Create a persistent announcement that appears on the mobile app's social feed.</p>
+        <div class="form-group">
+          <label for="announce-title">Announcement Title</label>
+          <input type="text" id="announce-title" placeholder="e.g. 🏆 Weekend Event Winner!" />
+        </div>
+        <div class="form-group" style="margin-top:14px;">
+          <label for="announce-body">Announcement Body</label>
+          <textarea id="announce-body" rows="5" placeholder="e.g. Congratulations to NinjaRunner for claiming 42 zones this weekend!"></textarea>
+        </div>
+        <button id="send-announce-btn" class="btn-primary btn-large" style="width:100%;margin-top:20px;background-color:#10b981;">
+          ✍️ Publish to Social Feed
+        </button>
+      </section>
+
       <!-- Push Tips Card -->
       <section class="panel glass push-tips">
         <div class="panel-header">
           <div class="panel-title">💡 Broadcast Tips</div>
         </div>
         <ul class="tips-list">
+          <li><strong>📢 Feed Announcements</strong> – Unlike push notifications, announcements are persistent and will be seen by all users in their feed.</li>
           <li><strong>🎯 Be specific</strong> – Short, clear titles get more opens.</li>
           <li><strong>⚠️ Use sparingly</strong> – Too many notifications reduce engagement.</li>
           <li><strong>🏃 Action-driven</strong> – Tell users what to do next ("Log in now!", "Claim your zone!").</li>
-          <li><strong>📊 Check count</strong> – Only users with Expo tokens registered will receive this. Uninstalled or background-off apps may not show it.</li>
-          <li><strong>🕐 Best time</strong> – Send during peak evening hours (6pm–9pm) for max engagement.</li>
         </ul>
       </section>
 

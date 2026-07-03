@@ -464,6 +464,23 @@ io.on('connection', async (socket: Socket) => {
     // Save to DB
     await saveTerritory(newTerritory);
 
+    // Auto-create a feed post for this claim
+    try {
+      await pool.query(
+        `INSERT INTO posts (user_id, content, post_type, related_id, created_at)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [
+          payload.userId,
+          `Claimed a new territory of ${payload.areaSquareMeters.toFixed(0)} sqm!`,
+          'territory',
+          newTerritory.id,
+          newTerritory.claimedAt
+        ]
+      );
+    } catch (err: any) {
+      console.error('[DB] Failed to auto-generate territory post:', err.message);
+    }
+
     // Update in-memory cache
     territoriesCache.set(newTerritory.id, newTerritory);
 
@@ -493,6 +510,290 @@ app.get('/health', (req, res) => {
     territoriesCount: territoriesCache.size,
     db: pool.totalCount > 0 ? 'connected' : 'disconnected',
   });
+});
+
+// --- Admin Monitoring Middleware ---
+const adminAuthMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  const token = req.headers['x-admin-token'];
+  const secret = process.env.ADMIN_SECRET_KEY || 'default_admin_secret_key_change_me';
+  if (token === secret) {
+    next();
+  } else {
+    res.status(401).json({ error: 'Unauthorized' });
+  }
+};
+
+// --- Phase 2: Social REST Routes ---
+
+// Get merged, paginated social feed
+app.get('/api/feed', async (req, res) => {
+  try {
+    const userId = (req.query.userId as string) || '';
+    const limit = parseInt(req.query.limit as string) || 20;
+    const offset = parseInt(req.query.offset as string) || 0;
+
+    const queryText = `
+      SELECT * FROM (
+        (
+          SELECT
+            p.id::text AS id,
+            p.user_id AS user_id,
+            u.display_name AS user_name,
+            u.avatar_url AS user_avatar,
+            u.color AS user_color,
+            NULL AS title,
+            p.content AS content,
+            p.image_url AS image_url,
+            p.post_type AS post_type,
+            p.related_id AS related_id,
+            p.created_at AS created_at,
+            COALESCE(likes_calc.count, 0)::int AS likes_count,
+            COALESCE(comments_calc.count, 0)::int AS comments_count,
+            EXISTS (SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1) AS is_liked,
+            t.area_square_meters::float AS territory_area,
+            t.polygon_coordinates AS territory_coordinates
+          FROM posts p
+          LEFT JOIN users u ON u.id = p.user_id
+          LEFT JOIN territories t ON t.id = p.related_id AND p.post_type = 'territory'
+          LEFT JOIN (
+            SELECT post_id, COUNT(*) AS count FROM likes GROUP BY post_id
+          ) likes_calc ON likes_calc.post_id = p.id
+          LEFT JOIN (
+            SELECT post_id, COUNT(*) AS count FROM comments GROUP BY post_id
+          ) comments_calc ON comments_calc.post_id = p.id
+        )
+        UNION ALL
+        (
+          SELECT
+            'ann_' || a.id AS id,
+            'admin' AS user_id,
+            'Admin' AS user_name,
+            NULL AS user_avatar,
+            '#FFD700' AS user_color,
+            a.title AS title,
+            a.body AS content,
+            NULL AS image_url,
+            'announcement' AS post_type,
+            NULL AS related_id,
+            a.created_at AS created_at,
+            0 AS likes_count,
+            0 AS comments_count,
+            FALSE AS is_liked,
+            NULL AS territory_area,
+            NULL AS territory_coordinates
+          FROM announcements a
+        )
+      ) combined
+      ORDER BY created_at DESC
+      LIMIT $2 OFFSET $3
+    `;
+
+    const result = await pool.query(queryText, [userId, limit, offset]);
+    res.json(result.rows);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Create user post
+app.post('/api/posts', async (req, res) => {
+  const { userId, content, imageUrl, postType, relatedId } = req.body;
+  if (!userId || !content) {
+    return res.status(400).json({ error: 'Missing userId or content' });
+  }
+  try {
+    const result = await pool.query(
+      `INSERT INTO posts (user_id, content, image_url, post_type, related_id)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, user_id, content, image_url, post_type, related_id, created_at`,
+      [userId, content, imageUrl || null, postType || 'user', relatedId || null]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete own post
+app.delete('/api/posts/:id', async (req, res) => {
+  const postId = req.params.id;
+  const { userId } = req.body;
+  if (!userId) {
+    return res.status(400).json({ error: 'Missing userId' });
+  }
+  try {
+    const result = await pool.query(
+      'DELETE FROM posts WHERE id = $1 AND user_id = $2 RETURNING id',
+      [postId, userId]
+    );
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'Post not found or unauthorized' });
+    }
+    res.json({ message: 'Post deleted successfully', id: postId });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Toggle post like
+app.post('/api/posts/:id/like', async (req, res) => {
+  const postId = req.params.id;
+  const { userId } = req.body;
+  if (!userId) {
+    return res.status(400).json({ error: 'Missing userId' });
+  }
+  try {
+    const checkLike = await pool.query(
+      'SELECT id FROM likes WHERE post_id = $1 AND user_id = $2',
+      [postId, userId]
+    );
+
+    let liked = false;
+    if (checkLike.rowCount && checkLike.rowCount > 0) {
+      await pool.query('DELETE FROM likes WHERE post_id = $1 AND user_id = $2', [postId, userId]);
+    } else {
+      await pool.query('INSERT INTO likes (post_id, user_id) VALUES ($1, $2)', [postId, userId]);
+      liked = true;
+    }
+
+    const countRes = await pool.query('SELECT COUNT(*)::int AS count FROM likes WHERE post_id = $1', [postId]);
+    res.json({ liked, likesCount: countRes.rows[0].count });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Fetch comments for a post
+app.get('/api/posts/:id/comments', async (req, res) => {
+  const postId = req.params.id;
+  try {
+    const result = await pool.query(
+      `SELECT c.id, c.user_id, u.display_name AS user_name, u.avatar_url AS user_avatar, c.content, c.created_at
+       FROM comments c
+       LEFT JOIN users u ON u.id = c.user_id
+       WHERE c.post_id = $1
+       ORDER BY c.created_at ASC`,
+      [postId]
+    );
+    res.json(result.rows);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Add comment to a post
+app.post('/api/posts/:id/comments', async (req, res) => {
+  const postId = req.params.id;
+  const { userId, content } = req.body;
+  if (!userId || !content) {
+    return res.status(400).json({ error: 'Missing userId or content' });
+  }
+  try {
+    const result = await pool.query(
+      `INSERT INTO comments (post_id, user_id, content)
+       VALUES ($1, $2, $3)
+       RETURNING id, post_id, user_id, content, created_at`,
+      [postId, userId, content]
+    );
+    
+    const userRes = await pool.query('SELECT display_name, avatar_url FROM users WHERE id = $1', [userId]);
+    const comment = {
+      ...result.rows[0],
+      user_name: userRes.rows[0]?.display_name || 'Runner',
+      user_avatar: userRes.rows[0]?.avatar_url || ''
+    };
+    res.status(201).json(comment);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete own comment
+app.delete('/api/comments/:id', async (req, res) => {
+  const commentId = req.params.id;
+  const { userId } = req.body;
+  if (!userId) {
+    return res.status(400).json({ error: 'Missing userId' });
+  }
+  try {
+    const result = await pool.query(
+      'DELETE FROM comments WHERE id = $1 AND user_id = $2 RETURNING id',
+      [commentId, userId]
+    );
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'Comment not found or unauthorized' });
+    }
+    res.json({ message: 'Comment deleted successfully', id: commentId });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Fetch user profile stats + user posts gallery
+app.get('/api/profile/:userId', async (req, res) => {
+  const { userId } = req.params;
+  try {
+    const userRes = await pool.query(
+      `SELECT id, display_name AS displayName, avatar_url AS avatarUrl, character_type AS characterType, color,
+              (SELECT COALESCE(SUM(distance_meters), 0)::float FROM runs WHERE user_id = $1) AS totalDistanceMeters,
+              (SELECT COUNT(*)::int FROM territories WHERE owner_id = $1) AS totalTerritoriesCount
+       FROM users WHERE id = $1`,
+      [userId]
+    );
+    if (userRes.rowCount === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const postsRes = await pool.query(
+      `SELECT p.id, p.content, p.image_url, p.post_type, p.related_id, p.created_at,
+              COALESCE(likes_calc.count, 0)::int AS likes_count,
+              COALESCE(comments_calc.count, 0)::int AS comments_count
+       FROM posts p
+       LEFT JOIN (
+         SELECT post_id, COUNT(*) AS count FROM likes GROUP BY post_id
+       ) likes_calc ON likes_calc.post_id = p.id
+       LEFT JOIN (
+         SELECT post_id, COUNT(*) AS count FROM comments GROUP BY post_id
+       ) comments_calc ON comments_calc.post_id = p.id
+       WHERE p.user_id = $1
+       ORDER BY p.created_at DESC`,
+      [userId]
+    );
+
+    res.json({
+      user: userRes.rows[0],
+      posts: postsRes.rows
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Fetch announcements list
+app.get('/api/announcements', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM announcements ORDER BY created_at DESC');
+    res.json(result.rows);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Create announcement (admin only)
+app.post('/api/admin/announcements', adminAuthMiddleware, async (req, res) => {
+  const { title, body, createdBy } = req.body;
+  if (!title || !body) {
+    return res.status(400).json({ error: 'Missing title or body' });
+  }
+  try {
+    const result = await pool.query(
+      'INSERT INTO announcements (title, body, created_by) VALUES ($1, $2, $3) RETURNING *',
+      [title, body, createdBy || 'admin']
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // REST: Get all territories
@@ -621,15 +922,6 @@ app.get('/runs/details/:runId', async (req, res) => {
 });
 
 // --- Admin Monitoring Panel Endpoints ---
-const adminAuthMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  const token = req.headers['x-admin-token'];
-  const secret = process.env.ADMIN_SECRET_KEY || 'default_admin_secret_key_change_me';
-  if (token === secret) {
-    next();
-  } else {
-    res.status(401).json({ error: 'Unauthorized' });
-  }
-};
 
 app.get('/api/admin/stats', adminAuthMiddleware, async (req, res) => {
   try {

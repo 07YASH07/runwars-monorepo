@@ -67,6 +67,11 @@ const pushTitle = document.getElementById('push-title');
 const pushBody = document.getElementById('push-body');
 const sendPushBtn = document.getElementById('send-push-btn');
 
+// Announcement DOM
+const announceTitle = document.getElementById('announce-title');
+const announceBody = document.getElementById('announce-body');
+const sendAnnounceBtn = document.getElementById('send-announce-btn');
+
 // =============================================
 // ANALYTICS — Chart.js + Leaderboards
 // =============================================
@@ -707,6 +712,52 @@ async function sendPushBroadcast() {
   }
 }
 
+async function sendAnnouncementBroadcast() {
+  const token = getAdminToken();
+  if (!token) return;
+
+  const payload = {
+    title: announceTitle.value.trim(),
+    body: announceBody.value.trim(),
+    createdBy: 'admin'
+  };
+
+  if (!payload.title || !payload.body) {
+    alert('Please fill out both announcement title and body.');
+    return;
+  }
+
+  sendAnnounceBtn.disabled = true;
+  sendAnnounceBtn.innerText = 'Publishing Announcement...';
+
+  try {
+    const res = await fetch('/api/admin/announcements', {
+      method: 'POST',
+      headers: {
+        'x-admin-token': token,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      writeLog(`Feed Announcement Published: "${payload.title}"`, 'system');
+      announceTitle.value = '';
+      announceBody.value = '';
+      alert('Announcement published successfully to the social feed!');
+    } else {
+      const err = await res.json();
+      alert(`Publish failed: ${err.error}`);
+    }
+  } catch (err) {
+    alert(`Error: ${err.message}`);
+  } finally {
+    sendAnnounceBtn.disabled = false;
+    sendAnnounceBtn.innerText = 'Publish to Social Feed';
+  }
+}
+
 // Heatmap overlays
 async function toggleHeatmap(show) {
   const token = getAdminToken();
@@ -1090,6 +1141,9 @@ document.getElementById('export-csv-btn').addEventListener('click', exportUsersC
 
 // Push Broadcaster action
 sendPushBtn.addEventListener('click', sendPushBroadcast);
+
+// Announcement Broadcaster action
+sendAnnounceBtn.addEventListener('click', sendAnnouncementBroadcast);
 
 // Phase 4: Monitor refresh
 document.getElementById('refresh-monitor-btn').addEventListener('click', fetchMonitorData);
