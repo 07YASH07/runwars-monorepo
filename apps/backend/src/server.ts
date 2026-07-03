@@ -130,12 +130,44 @@ async function upsertUser(userId: string, data: Partial<{ email: string; display
   }
 }
 
-async function saveRun(userId: string, routePoints: any[], distanceMeters: number) {
+function haversineDistance(p1: any, p2: any): number {
+  const R = 6371000; // Earth radius in meters
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+
+  const dLat = toRad(p2.latitude - p1.latitude);
+  const dLon = toRad(p2.longitude - p1.longitude);
+
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(p1.latitude)) *
+      Math.cos(toRad(p2.latitude)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+function calculateDistance(points: any[]): number {
+  if (points.length < 2) return 0;
+
+  let totalMeters = 0;
+  for (let i = 1; i < points.length; i++) {
+    const prev = points[i - 1];
+    const curr = points[i];
+    if (prev && curr) {
+      totalMeters += haversineDistance(prev, curr);
+    }
+  }
+  return totalMeters;
+}
+
+async function saveRun(userId: string, routePoints: any[], distanceMeters: number, activityType?: string) {
   try {
     const result = await pool.query(
-      `INSERT INTO runs (user_id, route_points, distance_meters)
-       VALUES ($1, $2, $3) RETURNING id`,
-      [userId, JSON.stringify(routePoints), distanceMeters]
+      `INSERT INTO runs (user_id, route_points, distance_meters, activity_type)
+       VALUES ($1, $2, $3, $4) RETURNING id`,
+      [userId, JSON.stringify(routePoints), distanceMeters, activityType || 'run']
     );
     return result.rows[0]?.id;
   } catch (err: any) {
@@ -147,11 +179,13 @@ async function saveRun(userId: string, routePoints: any[], distanceMeters: numbe
 async function saveTerritory(territory: Territory) {
   try {
     await pool.query(
-      `INSERT INTO territories (id, owner_id, polygon_coordinates, area_square_meters, color, run_session_id, claimed_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO territories (id, owner_id, polygon_coordinates, area_square_meters, color, run_session_id, claimed_at, avg_speed_kmh, activity_type)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        ON CONFLICT (id) DO UPDATE SET
          polygon_coordinates = EXCLUDED.polygon_coordinates,
-         area_square_meters = EXCLUDED.area_square_meters`,
+         area_square_meters = EXCLUDED.area_square_meters,
+         avg_speed_kmh = EXCLUDED.avg_speed_kmh,
+         activity_type = EXCLUDED.activity_type`,
       [
         territory.id,
         territory.userId,
@@ -160,6 +194,8 @@ async function saveTerritory(territory: Territory) {
         territory.color,
         territory.runSessionId,
         territory.claimedAt,
+        territory.avgSpeedKmh || 0,
+        territory.activityType || 'run',
       ]
     );
     console.log(`[DB] Territory ${territory.id} saved successfully.`);
@@ -171,7 +207,7 @@ async function saveTerritory(territory: Territory) {
 async function loadAllTerritories(): Promise<Territory[]> {
   try {
     const result = await pool.query(
-      `SELECT t.id, t.owner_id, t.polygon_coordinates, t.area_square_meters, t.color, t.run_session_id, t.claimed_at,
+      `SELECT t.id, t.owner_id, t.polygon_coordinates, t.area_square_meters, t.color, t.run_session_id, t.claimed_at, t.avg_speed_kmh, t.activity_type,
               u.display_name AS owner_name, u.avatar_url AS owner_avatar
        FROM territories t
        LEFT JOIN users u ON u.id = t.owner_id`
@@ -186,6 +222,8 @@ async function loadAllTerritories(): Promise<Territory[]> {
       claimedAt: row.claimed_at?.toISOString() || new Date().toISOString(),
       ownerName: row.owner_name || 'Runner',
       ownerAvatar: row.owner_avatar || '',
+      avgSpeedKmh: row.avg_speed_kmh || 0,
+      activityType: row.activity_type || 'run',
     }));
   } catch (err: any) {
     console.error('[DB] loadAllTerritories error:', err.message);
@@ -273,7 +311,7 @@ io.on('connection', async (socket: Socket) => {
     console.log(`[Socket.io] Run stopped by user: ${payload.userId}, Distance: ${payload.distanceMeters}m`);
 
     // Persist run to DB and track the promise to avoid race conditions
-    const promise = saveRun(payload.userId, payload.routePoints || [], payload.distanceMeters);
+    const promise = saveRun(payload.userId, payload.routePoints || [], payload.distanceMeters, payload.activityType);
     ongoingDbWrites.set(payload.userId, promise);
     try {
       await promise;
@@ -290,7 +328,7 @@ io.on('connection', async (socket: Socket) => {
     }
   });
 
-  socket.on('territoryClaim', async (payload: TerritoryClaimPayload & { polygonCoordinates: any[]; areaSquareMeters: number; color: string }) => {
+  socket.on('territoryClaim', async (payload: TerritoryClaimPayload & { polygonCoordinates: any[]; areaSquareMeters: number; color: string; activityType?: string }) => {
     console.log(`[Socket.io] Territory claimed by user: ${payload.userId}, Area: ${payload.areaSquareMeters} sqm`);
 
     // Wait for any ongoing run saves to complete to prevent distance race conditions
@@ -298,6 +336,38 @@ io.on('connection', async (socket: Socket) => {
     if (pendingSave) {
       console.log(`[Socket.io] Delaying claim verification: Waiting for user ${payload.userId} run to save...`);
       await pendingSave;
+    }
+
+    // 🏃 Cheating Prevention: Calculate average speed
+    let avgSpeedKmh = 0;
+    const coords = payload.polygonCoordinates || [];
+    const activityType = payload.activityType || 'run';
+
+    if (coords.length >= 2) {
+      const distanceMeters = calculateDistance(coords);
+      const firstPoint = coords[0];
+      const lastPoint = coords[coords.length - 1];
+      const timeDiffMs = lastPoint.timestamp - firstPoint.timestamp;
+
+      if (timeDiffMs > 0) {
+        const timeDiffHours = timeDiffMs / (1000 * 60 * 60);
+        avgSpeedKmh = (distanceMeters / 1000) / timeDiffHours;
+      }
+    }
+
+    const SPEED_LIMITS: Record<string, number> = {
+      run: 40,
+      walk: 10,
+      cycle: 70
+    };
+    const limit = SPEED_LIMITS[activityType] || 40;
+
+    if (avgSpeedKmh > limit) {
+      console.log(`[CLAIM REJECTED] Speed too high: ${avgSpeedKmh.toFixed(1)} km/h for activity type: ${activityType} (Limit: ${limit} km/h, User: ${payload.userId})`);
+      socket.emit('claim:rejected', {
+        reason: `Your average speed (${avgSpeedKmh.toFixed(1)} km/h) exceeds the maximum allowed speed for ${activityType} (${limit} km/h).`
+      });
+      return;
     }
 
     let ownerName = 'Runner';
@@ -322,6 +392,8 @@ io.on('connection', async (socket: Socket) => {
       color: payload.color,
       ownerName,
       ownerAvatar,
+      avgSpeedKmh,
+      activityType
     };
 
     // ⚔️ Territory Battle Engine — check for overlaps with other players' territories

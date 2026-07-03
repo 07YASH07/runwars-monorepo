@@ -250,6 +250,14 @@ function showZoneInspector(territory) {
         <span class="zone-detail-value">${t.polygonCoordinates ? t.polygonCoordinates.length : 0} points</span>
       </div>
       <div class="zone-detail-row">
+        <span class="zone-detail-label">Activity</span>
+        <span class="zone-detail-value" style="text-transform: capitalize;">${t.activityType || 'Run'}</span>
+      </div>
+      <div class="zone-detail-row">
+        <span class="zone-detail-label">Avg Speed</span>
+        <span class="zone-detail-value">${t.avgSpeedKmh ? t.avgSpeedKmh.toFixed(1) + ' km/h' : '0.0 km/h'}</span>
+      </div>
+      <div class="zone-detail-row">
         <span class="zone-detail-label">Claimed</span>
         <span class="zone-detail-value" style="font-size:11px;">${claimedDate}</span>
       </div>
