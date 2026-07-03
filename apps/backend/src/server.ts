@@ -802,25 +802,61 @@ app.get('/territories', async (req, res) => {
   res.json(territories);
 });
 
-// REST: Get global leaderboard ranked by total territory claimed
+// REST: Get global leaderboard ranked by selected activity type and metric
 app.get('/leaderboard', async (req, res) => {
   try {
-    const result = await pool.query(`
+    const allowedActivities = ['all', 'run', 'walk', 'cycle'];
+    const allowedMetrics = ['distance', 'territory', 'zones'];
+
+    const activity = allowedActivities.includes(req.query.activity as string)
+      ? (req.query.activity as string)
+      : 'all';
+    const metric = allowedMetrics.includes(req.query.metric as string)
+      ? (req.query.metric as string)
+      : 'territory';
+
+    // Build filters safely based on whitelisted strings
+    const territoryFilter = activity !== 'all' ? `AND activity_type = '${activity}'` : '';
+    const runFilter = activity !== 'all' ? `AND activity_type = '${activity}'` : '';
+
+    let orderByColumn = 'total_territory';
+    if (metric === 'distance') orderByColumn = 'total_distance';
+    else if (metric === 'zones') orderByColumn = 'total_zones';
+
+    const queryText = `
       SELECT
         u.id,
         u.display_name,
         u.character_type,
         u.color,
-        COALESCE(SUM(t.area_square_meters), 0)::float AS total_territory,
-        COUNT(DISTINCT r.id)::int AS total_runs,
-        COALESCE(SUM(r.distance_meters), 0)::float AS total_distance
+        COALESCE(t_calc.total_territory, 0)::float AS total_territory,
+        COALESCE(t_calc.total_zones, 0)::int AS total_zones,
+        COALESCE(r_calc.total_runs, 0)::int AS total_runs,
+        COALESCE(r_calc.total_distance, 0)::float AS total_distance
       FROM users u
-      LEFT JOIN territories t ON t.owner_id = u.id
-      LEFT JOIN runs r ON r.user_id = u.id
-      GROUP BY u.id
-      ORDER BY total_territory DESC
+      LEFT JOIN (
+        SELECT
+          owner_id AS user_id,
+          SUM(area_square_meters) AS total_territory,
+          COUNT(*) AS total_zones
+        FROM territories
+        WHERE 1=1 ${territoryFilter}
+        GROUP BY owner_id
+      ) t_calc ON t_calc.user_id = u.id
+      LEFT JOIN (
+        SELECT
+          user_id,
+          COUNT(*) AS total_runs,
+          SUM(distance_meters) AS total_distance
+        FROM runs
+        WHERE 1=1 ${runFilter}
+        GROUP BY user_id
+      ) r_calc ON r_calc.user_id = u.id
+      ORDER BY ${orderByColumn} DESC
       LIMIT 20
-    `);
+    `;
+
+    const result = await pool.query(queryText);
     res.json(result.rows);
   } catch (err: any) {
     console.error('[API] /leaderboard error:', err.message);
