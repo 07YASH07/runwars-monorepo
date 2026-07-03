@@ -13,7 +13,7 @@
     "backend": "npm run dev --workspace=@runwars/backend",
     "dev": "concurrently \"npm run backend\" \"npm run mobile\"",
     "build:shared": "npm run build --workspace=packages/shared",
-    "build:backend": "npm install --include=dev && npm run build --workspace=@runwars/backend",
+    "build:backend": "npm install --include=dev && npm run build:shared && npm run build --workspace=@runwars/backend",
     "start:backend": "npm run start --workspace=@runwars/backend",
     "lint": "npm run lint --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present"
