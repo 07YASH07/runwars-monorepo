@@ -52,6 +52,7 @@ const socketToUser = new Map<string, string>();
 const userToSocket = new Map<string, string>(); // userId -> socketId for targeted events
 const pushTokens = new Map<string, string>();   // userId -> Expo push token
 const ongoingDbWrites = new Map<string, Promise<any>>();
+const lastAlerts = new Map<string, number>();   // spam prevention for invasion alerts
 
 // In-memory push notification log (Phase 4)
 interface PushLogEntry { title: string; body: string; sentCount: number; timestamp: string; }
@@ -75,6 +76,25 @@ function getBBox(coords: { latitude: number; longitude: number }[]): BBox {
 function bboxOverlaps(a: BBox, b: BBox): boolean {
   return !(a.maxLat < b.minLat || a.minLat > b.maxLat ||
            a.maxLng < b.minLng || a.minLng > b.maxLng);
+}
+
+// Ray-casting Point-in-Polygon check
+function isPointInPolygon(point: { latitude: number; longitude: number }, polygon: { latitude: number; longitude: number }[]): boolean {
+  if (!polygon || polygon.length < 3) return false;
+  const x = point.longitude;
+  const y = point.latitude;
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i].longitude;
+    const yi = polygon[i].latitude;
+    const xj = polygon[j].longitude;
+    const yj = polygon[j].latitude;
+    
+    const intersect = ((yi > y) !== (yj > y))
+        && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
 }
 
 // Get total distance run by a player from DB
@@ -294,6 +314,34 @@ io.on('connection', async (socket: Socket) => {
       livePlayers.set(payload.userId, player);
       socket.broadcast.emit('locationUpdated', payload);
       io.emit('livePlayersUpdate', Array.from(livePlayers.values()));
+
+      // Real-time boundary invasion checks
+      for (const t of Array.from(territoriesCache.values())) {
+        if (t.userId !== payload.userId) {
+          const inTerritory = isPointInPolygon(payload.point, t.polygonCoordinates);
+          if (inTerritory) {
+            const ownerPushToken = pushTokens.get(t.userId);
+            if (ownerPushToken) {
+              const spamKey = `${t.id}_${payload.userId}`;
+              const lastAlert = lastAlerts.get(spamKey);
+              const now = Date.now();
+              if (!lastAlert || (now - lastAlert > 300000)) { // 5-minute cooldown
+                lastAlerts.set(spamKey, now);
+                sendPushNotification(
+                  ownerPushToken,
+                  '⚠️ Territory Alert!',
+                  `Runner ${player.displayName || 'someone'} has entered your territory (Zone ${t.id.substring(0, 6)})!`
+                ).catch(console.error);
+
+                // Send in-app PvP warning alert to the invader
+                socket.emit('pvp:warning', {
+                  message: `⚠️ Warning: You have entered territory owned by another runner!`
+                });
+              }
+            }
+          }
+        }
+      }
     }
   });
 
@@ -313,10 +361,34 @@ io.on('connection', async (socket: Socket) => {
     // Persist run to DB and track the promise to avoid race conditions
     const promise = saveRun(payload.userId, payload.routePoints || [], payload.distanceMeters, payload.activityType);
     ongoingDbWrites.set(payload.userId, promise);
+    let runId = null;
     try {
-      await promise;
+      runId = await promise;
     } finally {
       ongoingDbWrites.delete(payload.userId);
+    }
+
+    // Auto-create a feed post for this run
+    if (runId && payload.distanceMeters > 0) {
+      try {
+        const km = (payload.distanceMeters / 1000).toFixed(2);
+        const act = payload.activityType || 'run';
+        await pool.query(
+          `INSERT INTO posts (user_id, content, post_type, related_id)
+           VALUES ($1, $2, $3, $4)`,
+          [
+            payload.userId,
+            `Completed a new ${act} session covering ${km} km!`,
+            'run',
+            runId
+          ]
+        );
+        // Award 50 Arena Coins
+        await pool.query('UPDATE users SET coins = coins + 50 WHERE id = $1', [payload.userId]);
+        io.emit('feed:updated');
+      } catch (err: any) {
+        console.error('[DB] Failed to auto-generate run feed post:', err.message);
+      }
     }
 
     const player = livePlayers.get(payload.userId);
@@ -477,6 +549,9 @@ io.on('connection', async (socket: Socket) => {
           newTerritory.claimedAt
         ]
       );
+      // Award 10 Arena Coins
+      await pool.query('UPDATE users SET coins = coins + 10 WHERE id = $1', [payload.userId]);
+      io.emit('feed:updated');
     } catch (err: any) {
       console.error('[DB] Failed to auto-generate territory post:', err.message);
     }
@@ -608,6 +683,7 @@ app.post('/api/posts', async (req, res) => {
        RETURNING id, user_id, content, image_url, post_type, related_id, created_at`,
       [userId, content, imageUrl || null, postType || 'user', relatedId || null]
     );
+    io.emit('feed:updated');
     res.status(201).json(result.rows[0]);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -629,6 +705,7 @@ app.delete('/api/posts/:id', async (req, res) => {
     if (result.rowCount === 0) {
       return res.status(404).json({ error: 'Post not found or unauthorized' });
     }
+    io.emit('feed:updated');
     res.json({ message: 'Post deleted successfully', id: postId });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -654,6 +731,22 @@ app.post('/api/posts/:id/like', async (req, res) => {
     } else {
       await pool.query('INSERT INTO likes (post_id, user_id) VALUES ($1, $2)', [postId, userId]);
       liked = true;
+
+      // Send push notification to post owner
+      try {
+        const postRes = await pool.query('SELECT user_id FROM posts WHERE id = $1', [postId]);
+        if (postRes.rows[0] && postRes.rows[0].user_id !== userId) {
+          const ownerId = postRes.rows[0].user_id;
+          const ownerToken = pushTokens.get(ownerId);
+          if (ownerToken) {
+            const userRes = await pool.query('SELECT display_name FROM users WHERE id = $1', [userId]);
+            const likerName = userRes.rows[0]?.display_name || 'A runner';
+            await sendPushNotification(ownerToken, '❤️ Post Liked', `${likerName} liked your post!`);
+          }
+        }
+      } catch (err) {
+        console.error('[Push] Like notification failed:', err);
+      }
     }
 
     const countRes = await pool.query('SELECT COUNT(*)::int AS count FROM likes WHERE post_id = $1', [postId]);
@@ -702,6 +795,26 @@ app.post('/api/posts/:id/comments', async (req, res) => {
       user_name: userRes.rows[0]?.display_name || 'Runner',
       user_avatar: userRes.rows[0]?.avatar_url || ''
     };
+
+    // Send push notification to post owner
+    try {
+      const postRes = await pool.query('SELECT user_id FROM posts WHERE id = $1', [postId]);
+      if (postRes.rows[0] && postRes.rows[0].user_id !== userId) {
+        const ownerId = postRes.rows[0].user_id;
+        const ownerToken = pushTokens.get(ownerId);
+        if (ownerToken) {
+          const commenterName = userRes.rows[0]?.display_name || 'A runner';
+          await sendPushNotification(
+            ownerToken,
+            '💬 New Comment',
+            `${commenterName} commented on your post: "${content.substring(0, 40)}${content.length > 40 ? '...' : ''}"`
+          );
+        }
+      }
+    } catch (err) {
+      console.error('[Push] Comment notification failed:', err);
+    }
+
     res.status(201).json(comment);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -734,7 +847,7 @@ app.get('/api/profile/:userId', async (req, res) => {
   const { userId } = req.params;
   try {
     const userRes = await pool.query(
-      `SELECT id, display_name, avatar_url, character_type, color, bio FROM users WHERE id = $1`,
+      `SELECT id, display_name, avatar_url, character_type, color, bio, cover_image_url, coins, unlocked_colors FROM users WHERE id = $1`,
       [userId]
     );
     if (!userRes.rowCount || userRes.rowCount === 0) {
@@ -770,6 +883,14 @@ app.get('/api/profile/:userId', async (req, res) => {
       [userId]
     );
 
+    const friendsRes = await pool.query(
+      `SELECT u.id, u.display_name, u.avatar_url, u.character_type, u.color, u.bio
+       FROM friends f
+       JOIN users u ON u.id = f.friend_id
+       WHERE f.user_id = $1`,
+      [userId]
+    );
+
     res.json({
       user: {
         id: userRes.rows[0].id,
@@ -777,15 +898,183 @@ app.get('/api/profile/:userId', async (req, res) => {
         character_type: userRes.rows[0].character_type || 'scout',
         color: userRes.rows[0].color || '#00BFFF',
         bio: userRes.rows[0].bio || '',
-        avatar_url: userRes.rows[0].avatar_url || ''
+        avatar_url: userRes.rows[0].avatar_url || '',
+        cover_image_url: userRes.rows[0].cover_image_url || '',
+        coins: userRes.rows[0].coins || 0,
+        unlocked_colors: userRes.rows[0].unlocked_colors || []
       },
       stats: {
         total_distance: statsRes.rows[0]?.total_distance || 0,
         total_runs: statsRes.rows[0]?.total_runs || 0,
         total_zones: zonesRes.rows[0]?.total_zones || 0
       },
-      posts: postsRes.rows
+      posts: postsRes.rows,
+      friends: friendsRes.rows
     });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Friends API: Add Friend
+app.post('/api/friends/add', async (req, res) => {
+  const { userId, friendId } = req.body;
+  if (!userId || !friendId) {
+    return res.status(400).json({ error: 'Missing userId or friendId' });
+  }
+  if (userId === friendId) {
+    return res.status(400).json({ error: 'Cannot add yourself as a friend' });
+  }
+  try {
+    await pool.query(
+      `INSERT INTO friends (user_id, friend_id)
+       VALUES ($1, $2), ($2, $1)
+       ON CONFLICT (user_id, friend_id) DO NOTHING`,
+      [userId, friendId]
+    );
+
+    try {
+      const userRes = await pool.query('SELECT display_name FROM users WHERE id = $1', [userId]);
+      const friendToken = pushTokens.get(friendId);
+      if (friendToken) {
+        const adderName = userRes.rows[0]?.display_name || 'A runner';
+        await sendPushNotification(friendToken, '🤝 New Friend!', `${adderName} added you as a friend!`);
+      }
+    } catch (pushErr) {
+      console.error('[Push] Friend notification failed:', pushErr);
+    }
+
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Friends API: Remove Friend
+app.post('/api/friends/remove', async (req, res) => {
+  const { userId, friendId } = req.body;
+  if (!userId || !friendId) {
+    return res.status(400).json({ error: 'Missing userId or friendId' });
+  }
+  try {
+    await pool.query(
+      `DELETE FROM friends
+       WHERE (user_id = $1 AND friend_id = $2) OR (user_id = $2 AND friend_id = $1)`,
+      [userId, friendId]
+    );
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Friends API: Get friends list
+app.get('/api/friends/:userId', async (req, res) => {
+  const { userId } = req.params;
+  try {
+    const result = await pool.query(
+      `SELECT u.id, u.display_name, u.avatar_url, u.character_type, u.color, u.bio
+       FROM friends f
+       JOIN users u ON u.id = f.friend_id
+       WHERE f.user_id = $1`,
+      [userId]
+    );
+    res.json(result.rows);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Shop API: Unlock custom zone colors
+app.post('/api/shop/unlock-color', async (req, res) => {
+  const { userId, color } = req.body;
+  if (!userId || !color) {
+    return res.status(400).json({ error: 'Missing userId or color' });
+  }
+  try {
+    const userRes = await pool.query('SELECT coins, unlocked_colors FROM users WHERE id = $1', [userId]);
+    if (userRes.rowCount === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    const { coins, unlocked_colors } = userRes.rows[0];
+    const cost = 200;
+    if ((coins || 0) < cost) {
+      return res.status(400).json({ error: 'Insufficient Arena Coins' });
+    }
+    const currentColors = unlocked_colors || [];
+    if (currentColors.includes(color)) {
+      return res.status(400).json({ error: 'Color already unlocked' });
+    }
+    const newColors = [...currentColors, color];
+    await pool.query(
+      'UPDATE users SET coins = coins - $1, unlocked_colors = $2 WHERE id = $3',
+      [cost, newColors, userId]
+    );
+    res.json({ success: true, coins: coins - cost, unlockedColors: newColors });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Fetch nearby runners recommendation
+app.get('/api/community/nearby', async (req, res) => {
+  const { userId } = req.query;
+  if (!userId) {
+    return res.status(400).json({ error: 'Missing userId query parameter' });
+  }
+
+  try {
+    const activeRunners = Array.from(livePlayers.values());
+    const currentUser = activeRunners.find(p => p.userId === userId);
+    
+    // Helper function to calculate Haversine distance in km
+    const getDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+      const R = 6371; // radius of Earth in km
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                Math.sin(dLon / 2) * Math.sin(dLon / 2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return R * c;
+    };
+
+    let recommended = [];
+
+    if (currentUser && currentUser.currentPosition) {
+      recommended = activeRunners
+        .filter(p => p.userId !== userId && p.currentPosition)
+        .map(p => {
+          const dist = getDistance(
+            currentUser.currentPosition!.latitude,
+            currentUser.currentPosition!.longitude,
+            p.currentPosition!.latitude,
+            p.currentPosition!.longitude
+          );
+          return { ...p, distanceKm: parseFloat(dist.toFixed(2)) };
+        })
+        .filter(p => p.distanceKm <= 15.0)
+        .sort((a, b) => a.distanceKm - b.distanceKm);
+    }
+
+    if (recommended.length === 0) {
+      const topRunners = await pool.query(
+        `SELECT id AS "userId", display_name AS "displayName", avatar_url AS "avatarUrl", character_type AS "characterType", color, bio
+         FROM users
+         WHERE id != $1
+         LIMIT 5`,
+        [userId]
+      );
+      recommended = topRunners.rows.map(row => ({
+        ...row,
+        avatarUrl: row.avatarUrl || '',
+        characterType: row.characterType || 'scout',
+        color: row.color || '#00BFFF',
+        distanceKm: null
+      }));
+    }
+
+    res.json(recommended);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -920,20 +1209,21 @@ app.get('/profile/:userId', async (req, res) => {
 // REST: Update user profile
 app.post('/profile/update', async (req, res) => {
   try {
-    const { userId, displayName, characterType, color, bio, avatarUrl } = req.body;
+    const { userId, displayName, characterType, color, bio, avatarUrl, coverImageUrl } = req.body;
     if (!userId) {
       return res.status(400).json({ error: 'userId is required' });
     }
     await pool.query(
-      `INSERT INTO users (id, display_name, character_type, color, bio, avatar_url)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO users (id, display_name, character_type, color, bio, avatar_url, cover_image_url)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (id) DO UPDATE SET
          display_name = COALESCE(EXCLUDED.display_name, users.display_name),
          character_type = COALESCE(EXCLUDED.character_type, users.character_type),
          color = COALESCE(EXCLUDED.color, users.color),
          bio = COALESCE(EXCLUDED.bio, users.bio),
-         avatar_url = COALESCE(EXCLUDED.avatar_url, users.avatar_url)`,
-      [userId, displayName || null, characterType || null, color || null, bio || null, avatarUrl || null]
+         avatar_url = COALESCE(EXCLUDED.avatar_url, users.avatar_url),
+         cover_image_url = COALESCE(EXCLUDED.cover_image_url, users.cover_image_url)`,
+      [userId, displayName || null, characterType || null, color || null, bio || null, avatarUrl || null, coverImageUrl || null]
     );
     res.json({ success: true });
   } catch (err: any) {
