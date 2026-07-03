@@ -332,7 +332,10 @@ export default function RunScreen() {
       }, 1000);
 
       if (user) {
-        socketService.emitRunStart({ userId: user.uid });
+        socketService.emitRunStart({
+          userId: user.uid,
+          activityType: activityType === 'bike' ? 'cycle' : activityType,
+        });
       }
     } catch (error) {
       Alert.alert(
@@ -341,7 +344,7 @@ export default function RunScreen() {
       );
       dispatch({ type: 'RESET' });
     }
-  }, [handleLocationUpdate, startPulse]);
+  }, [handleLocationUpdate, startPulse, user, activityType]);
 
   // ── Stop run ──────────────────────────────────────────────────────────────
   const handleStop = useCallback(() => {
@@ -373,11 +376,14 @@ export default function RunScreen() {
           const finalDistance = calculateDistance(mergedPoints);
           clearBackgroundPoints();
 
+          const mappedActivity = activityType === 'bike' ? 'cycle' : activityType;
+
           if (user) {
             socketService.emitRunStop({
               userId: user.uid,
               routePoints: mergedPoints,
               distanceMeters: finalDistance,
+              activityType: mappedActivity,
             });
           }
 
@@ -394,7 +400,8 @@ export default function RunScreen() {
               runSessionId: 'session_' + Date.now(),
               polygonCoordinates: mergedPoints,
               areaSquareMeters,
-              color: user.color || '#32CD32'
+              color: user.color || '#32CD32',
+              activityType: mappedActivity,
             });
 
             // Navigate to post-run summary
@@ -411,7 +418,7 @@ export default function RunScreen() {
         },
       },
     ]);
-  }, [state.routePoints, state.distanceMeters, stopPulse]);
+  }, [state.routePoints, state.elapsedSeconds, stopPulse, user, activityType, navigation]);
 
   // ── Cleanup on unmount ────────────────────────────────────────────────────
   useEffect(() => {
@@ -578,27 +585,42 @@ export default function RunScreen() {
         {/* ── Activity Selector Row ── */}
         <View style={styles.activityContainer}>
           <TouchableOpacity
-            style={[styles.activityBox, activityType === 'run' && styles.activityBoxActive]}
+            style={[
+              styles.activityBox,
+              activityType === 'run' && styles.activityBoxActive,
+              state.isRunning && { opacity: 0.4 }
+            ]}
             onPress={() => setActivityType('run')}
+            disabled={state.isRunning}
           >
             <Text style={[styles.activityIcon, activityType === 'run' && styles.activityIconActive]}>🏃</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.activityBox, activityType === 'walk' && styles.activityBoxActive]}
+            style={[
+              styles.activityBox,
+              activityType === 'walk' && styles.activityBoxActive,
+              state.isRunning && { opacity: 0.4 }
+            ]}
             onPress={() => setActivityType('walk')}
+            disabled={state.isRunning}
           >
             <Text style={[styles.activityIcon, activityType === 'walk' && styles.activityIconActive]}>🚶</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.activityBox, activityType === 'bike' && styles.activityBoxActive]}
+            style={[
+              styles.activityBox,
+              activityType === 'bike' && styles.activityBoxActive,
+              state.isRunning && { opacity: 0.4 }
+            ]}
             onPress={() => setActivityType('bike')}
+            disabled={state.isRunning}
           >
             <Text style={[styles.activityIcon, activityType === 'bike' && styles.activityIconActive]}>🚴</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.activityBox}>
+          <TouchableOpacity style={[styles.activityBox, state.isRunning && { opacity: 0.4 }]} disabled={state.isRunning}>
             <Text style={styles.activityIcon}>•••</Text>
           </TouchableOpacity>
         </View>
