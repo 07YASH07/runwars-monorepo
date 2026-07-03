@@ -734,15 +734,25 @@ app.get('/api/profile/:userId', async (req, res) => {
   const { userId } = req.params;
   try {
     const userRes = await pool.query(
-      `SELECT id, display_name AS displayName, avatar_url AS avatarUrl, character_type AS characterType, color,
-              (SELECT COALESCE(SUM(distance_meters), 0)::float FROM runs WHERE user_id = $1) AS totalDistanceMeters,
-              (SELECT COUNT(*)::int FROM territories WHERE owner_id = $1) AS totalTerritoriesCount
-       FROM users WHERE id = $1`,
+      `SELECT id, display_name, avatar_url, character_type, color, bio FROM users WHERE id = $1`,
       [userId]
     );
-    if (userRes.rowCount === 0) {
+    if (!userRes.rowCount || userRes.rowCount === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
+
+    const statsRes = await pool.query(
+      `SELECT 
+         COALESCE(SUM(distance_meters), 0)::float AS total_distance,
+         COUNT(DISTINCT id)::int AS total_runs
+       FROM runs WHERE user_id = $1`,
+      [userId]
+    );
+
+    const zonesRes = await pool.query(
+      `SELECT COUNT(*)::int AS total_zones FROM territories WHERE owner_id = $1`,
+      [userId]
+    );
 
     const postsRes = await pool.query(
       `SELECT p.id, p.content, p.image_url, p.post_type, p.related_id, p.created_at,
@@ -761,7 +771,19 @@ app.get('/api/profile/:userId', async (req, res) => {
     );
 
     res.json({
-      user: userRes.rows[0],
+      user: {
+        id: userRes.rows[0].id,
+        display_name: userRes.rows[0].display_name || 'Runner',
+        character_type: userRes.rows[0].character_type || 'scout',
+        color: userRes.rows[0].color || '#00BFFF',
+        bio: userRes.rows[0].bio || '',
+        avatar_url: userRes.rows[0].avatar_url || ''
+      },
+      stats: {
+        total_distance: statsRes.rows[0]?.total_distance || 0,
+        total_runs: statsRes.rows[0]?.total_runs || 0,
+        total_zones: zonesRes.rows[0]?.total_zones || 0
+      },
       posts: postsRes.rows
     });
   } catch (err: any) {
