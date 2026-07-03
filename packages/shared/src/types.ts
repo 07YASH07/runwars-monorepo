@@ -52,6 +52,8 @@ export interface Territory {
   color: string; // hex
   ownerName?: string;
   ownerAvatar?: string;
+  avgSpeedKmh?: number;
+  activityType?: string;
 }
 
 // ─── Conflict ─────────────────────────────────────────────────────────────────
@@ -95,19 +97,24 @@ export interface LocationUpdatePayload {
   speedKmh: number;
 }
 
+export type ActivityType = 'run' | 'walk' | 'cycle';
+
 export interface RunStartPayload {
   userId: string;
+  activityType?: ActivityType;
 }
 
 export interface RunStopPayload {
   userId: string;
   routePoints: GeoPoint[];
   distanceMeters: number;
+  activityType?: ActivityType;
 }
 
 export interface TerritoryClaimPayload {
   userId: string;
   runSessionId: string;
+  activityType?: ActivityType;
 }
 
 // ─── API Response Shapes ─────────────────────────────────────────────────────
