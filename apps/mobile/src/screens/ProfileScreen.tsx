@@ -1,8 +1,8 @@
 /**
  * ProfileScreen — Player stats, run history, and profile customization.
- * Revamped to match the premium, clean Adidas Running aesthetic.
+ * Redesigned in v2.0 with Dual Tab (Stats vs Posts), Trophies, and Dark Mode theme.
  */
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -17,6 +17,7 @@ import {
   TextInput,
   Platform,
   KeyboardAvoidingView,
+  FlatList,
 } from 'react-native';
 import { useAuth } from '@/context/AuthContext';
 import { CHARACTER_EMOJI, CharacterType } from '@runwars/shared';
@@ -46,31 +47,24 @@ interface RunEntry {
   created_at: string;
 }
 
+interface UserPost {
+  id: string;
+  content: string;
+  image_url?: string;
+  created_at: string;
+  likes_count: number;
+  comments_count: number;
+}
+
 function StatCard({ label, value, unit }: { label: string; value: string; unit: string }) {
   return (
-    <View style={statStyles.card}>
-      <Text style={statStyles.value}>{value}</Text>
-      <Text style={statStyles.unit}>{unit}</Text>
-      <Text style={statStyles.label}>{label}</Text>
+    <View style={styles.statCard}>
+      <Text style={styles.statCardValue}>{value}</Text>
+      <Text style={styles.statCardUnit}>{unit}</Text>
+      <Text style={styles.statCardLabel}>{label}</Text>
     </View>
   );
 }
-
-const statStyles = StyleSheet.create({
-  card: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 8,
-    paddingVertical: 16,
-    alignItems: 'center',
-    borderWidth: 1.5,
-    borderColor: '#E0E0E0',
-    marginHorizontal: 4,
-  },
-  value: { fontSize: 24, fontWeight: '900', color: '#000000' },
-  unit: { fontSize: 10, color: '#8A8A8A', fontWeight: '700', marginTop: 2 },
-  label: { fontSize: 9, color: '#8A8A8A', letterSpacing: 1, marginTop: 4, fontWeight: '700' },
-});
 
 function formatDate(dateStr: string): string {
   const d = new Date(dateStr);
@@ -81,8 +75,9 @@ export default function ProfileScreen() {
   const { user, setCharacterAndColor } = useAuth();
   const [stats, setStats] = useState<ProfileStats | null>(null);
   const [runs, setRuns] = useState<RunEntry[]>([]);
+  const [myPosts, setMyPosts] = useState<UserPost[]>([]);
   const [loading, setLoading] = useState(true);
-  const [timeframe, setTimeframe] = useState<'all' | 'month' | 'week'>('all');
+  const [activeTab, setActiveTab] = useState<'stats' | 'posts'>('stats');
 
   // Edit Mode state
   const [editModalVisible, setEditModalVisible] = useState(false);
@@ -135,7 +130,7 @@ export default function ProfileScreen() {
     }
   };
 
-  const runStats = React.useMemo(() => {
+  const runStats = useMemo(() => {
     if (!selectedRun || !selectedRun.route_points || selectedRun.route_points.length < 2) return null;
     const pts = selectedRun.route_points;
     const start = pts[0].timestamp;
@@ -192,14 +187,30 @@ export default function ProfileScreen() {
   const fetchProfile = useCallback(async () => {
     if (!user?.uid) return;
     try {
-      const [profileRes, runsRes] = await Promise.all([
+      const [profileRes, runsRes, feedRes] = await Promise.all([
         fetch(`${API_URL}/profile/${user.uid}`, { headers: { 'Bypass-Tunnel-Reminder': 'true' } }),
         fetch(`${API_URL}/runs/${user.uid}`, { headers: { 'Bypass-Tunnel-Reminder': 'true' } }),
+        fetch(`${API_URL}/api/feed?userId=${user.uid}`, { headers: { 'Bypass-Tunnel-Reminder': 'true' } }),
       ]);
       const profileData = await profileRes.json();
       const runsData = await runsRes.json();
+      const feedData = await feedRes.json();
+
       setStats(profileData);
       setRuns(runsData);
+      
+      // Filter feed for only posts created by logged-in user
+      const userPosts = feedData
+        .filter((item: any) => item.feed_type === 'post' && item.user_id === user.uid)
+        .map((p: any) => ({
+          id: p.id,
+          content: p.content,
+          image_url: p.image_url,
+          created_at: p.created_at,
+          likes_count: p.likes_count,
+          comments_count: p.comments_count,
+        }));
+      setMyPosts(userPosts);
 
       // Pre-fill edit inputs
       setEditDisplayName(profileData.display_name || user.displayName || 'Runner');
@@ -212,7 +223,7 @@ export default function ProfileScreen() {
     } finally {
       setLoading(false);
     }
-  }, [user?.uid]);
+  }, [user]);
 
   useEffect(() => {
     fetchProfile();
@@ -274,7 +285,6 @@ export default function ProfileScreen() {
       if (data.success) {
         setEditModalVisible(false);
         fetchProfile();
-        // Update local auth context
         await setCharacterAndColor(editCharacter as any, editColor);
       } else {
         Alert.alert('Error', 'Failed to update profile.');
@@ -285,6 +295,31 @@ export default function ProfileScreen() {
     }
   };
 
+  const handleDeletePost = async (postId: string) => {
+    Alert.alert('Delete Post', 'Are you sure you want to delete this post?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            const res = await fetch(`${API_URL}/api/posts/${postId}`, {
+              method: 'DELETE',
+            });
+            if (res.ok) {
+              setMyPosts(prev => prev.filter(p => p.id !== postId));
+              fetchProfile();
+            } else {
+              Alert.alert('Error', 'Failed to delete post.');
+            }
+          } catch (err) {
+            Alert.alert('Error', 'Failed to connect to server.');
+          }
+        }
+      }
+    ]);
+  };
+
   const characterType = stats?.character_type ?? user?.characterType ?? 'scout';
   const color = stats?.color ?? user?.color ?? '#00BFFF';
   const displayName = stats?.display_name ?? user?.displayName ?? 'Runner';
@@ -292,232 +327,220 @@ export default function ProfileScreen() {
   const avatarUrl = stats?.avatar_url || '';
   const emoji = CHARACTER_EMOJI[characterType as CharacterType] ?? '🏃';
 
-  // Interactive filtering of runs
-  const filteredRuns = React.useMemo(() => {
-    const now = new Date();
-    return runs.filter(run => {
-      const runDate = new Date(run.created_at);
-      if (timeframe === 'week') {
-        const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-        return runDate >= oneWeekAgo;
-      }
-      if (timeframe === 'month') {
-        const oneMonthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-        return runDate >= oneMonthAgo;
-      }
-      return true;
-    });
-  }, [runs, timeframe]);
-
-  const displayRunsCount = timeframe === 'all' ? (stats?.total_runs ?? 0) : filteredRuns.length;
-  const displayDistanceKm = timeframe === 'all'
-    ? ((stats?.total_distance ?? 0) / 1000).toFixed(1)
-    : (filteredRuns.reduce((sum, r) => sum + r.distance_meters, 0) / 1000).toFixed(1);
+  const totalDistanceKm = ((stats?.total_distance ?? 0) / 1000).toFixed(1);
   const totalTerritoryKm2 = ((stats?.total_territory ?? 0) / 1_000_000).toFixed(4);
 
-  // Calculate XP (club points) and Level based on All-Time stats
+  // Unlocked Trophies list whitelisted:
+  const trophies = useMemo(() => {
+    const list = [];
+    const runsCount = stats?.total_runs || 0;
+    const distanceVal = (stats?.total_distance || 0) / 1000;
+    const territoryVal = (stats?.total_territory || 0) / 1_000_000;
+
+    if (runsCount >= 1) {
+      list.push({ id: '1', emoji: '🟢', name: 'First Blood', desc: 'Completed your first run session in the Arena.' });
+    }
+    if (runsCount >= 10) {
+      list.push({ id: '2', emoji: '🔥', name: 'Arena Regular', desc: 'Completed 10 runs in the Arena.' });
+    }
+    if (distanceVal >= 10) {
+      list.push({ id: '3', emoji: '👟', name: 'Distance Elite', desc: 'Covered over 10 KM in total running distance.' });
+    }
+    if (territoryVal >= 0.05) {
+      list.push({ id: '4', emoji: '👑', name: 'Zone Conqueror', desc: 'Conquered more than 0.05 km² of grids.' });
+    }
+    return list;
+  }, [stats]);
+
+  // Level Progression details
   const xp = Math.round((stats?.total_distance ?? 0) / 100) + Math.round((stats?.total_territory ?? 0) / 500);
   const level = Math.floor(xp / 100) + 1;
   const currentLevelXp = xp % 100;
   const xpProgress = currentLevelXp / 100;
-  
-  let rankTitle = 'Recruit Runner';
-  if (level >= 13) rankTitle = 'Arena Overlord';
-  else if (level >= 8) rankTitle = 'Territory Raider';
-  else if (level >= 4) rankTitle = 'Pace Elite';
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+      <StatusBar barStyle="light-content" backgroundColor="#0D0D1A" />
 
       {loading ? (
         <View style={styles.loadingCenter}>
           <ActivityIndicator color={color} size="large" />
         </View>
       ) : (
-        <ScrollView showsVerticalScrollIndicator={false}>
-          {/* ── Adidas Header Banner ── */}
-          <View style={styles.bannerContainer}>
-            <Image
-              source={{ uri: 'https://images.unsplash.com/photo-1448375240586-882707db888b?q=80&w=600&auto=format&fit=crop' }}
-              style={styles.bannerImage as any}
-            />
-            {/* White overlay ring around circular photo */}
-            <View style={[styles.avatarContainer, { borderColor: color, borderWidth: 2.5 }]}>
-              <TouchableOpacity
-                onPress={() => setEditModalVisible(true)}
-                activeOpacity={0.9}
-                style={styles.avatarTouchable}
-              >
-                {avatarUrl ? (
-                  <Image source={{ uri: avatarUrl }} style={styles.avatarPhoto as any} resizeMode="cover" />
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
+          
+          {/* Top Profile Header Section */}
+          <View style={styles.profileHeaderContainer}>
+            <View style={[styles.avatarBorder, { borderColor: color }]}>
+              {avatarUrl ? (
+                <Image source={{ uri: avatarUrl }} style={styles.profileImage} />
+              ) : (
+                <View style={styles.avatarPlaceholder}>
+                  <Text style={styles.avatarEmoji}>{emoji}</Text>
+                </View>
+              )}
+            </View>
+
+            <Text style={styles.displayNameText}>{displayName.toUpperCase()}</Text>
+            <Text style={styles.bioText}>{bioText}</Text>
+
+            <TouchableOpacity style={styles.editProfileBtn} onPress={() => setEditModalVisible(true)}>
+              <Text style={styles.editProfileBtnText}>Edit Profile</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Level Progress Bar */}
+          <View style={styles.progressContainer}>
+            <View style={styles.progressHeader}>
+              <Text style={styles.progressLevelText}>LEVEL {level}</Text>
+              <Text style={[styles.progressXpText, { color }]}>{xp} XP</Text>
+            </View>
+            <View style={styles.progressBarBg}>
+              <View style={[styles.progressBarFill, { backgroundColor: color, width: `${xpProgress * 100}%` }]} />
+            </View>
+            <View style={styles.progressLabelRow}>
+              <Text style={styles.progressSub}>{currentLevelXp} / 100 XP to next level</Text>
+              <Text style={styles.progressPercent}>{Math.round(xpProgress * 100)}%</Text>
+            </View>
+          </View>
+
+          {/* Double Tab Row */}
+          <View style={styles.tabContainer}>
+            <TouchableOpacity
+              style={[styles.tabButton, activeTab === 'stats' && styles.tabButtonActive]}
+              onPress={() => setActiveTab('stats')}
+            >
+              <Text style={[styles.tabButtonText, activeTab === 'stats' && styles.tabButtonTextActive]}>
+                📈 STATS & HISTORY
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.tabButton, activeTab === 'posts' && styles.tabButtonActive]}
+              onPress={() => setActiveTab('posts')}
+            >
+              <Text style={[styles.tabButtonText, activeTab === 'posts' && styles.tabButtonTextActive]}>
+                🖼️ MY POSTS ({myPosts.length})
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {activeTab === 'stats' ? (
+            /* ===== STATS TAB CONTENT ===== */
+            <View style={styles.tabContent}>
+              {/* StatCards Row */}
+              <View style={styles.statsGridRow}>
+                <StatCard label="RUNS" value={String(stats?.total_runs || 0)} unit="sessions" />
+                <StatCard label="DISTANCE" value={totalDistanceKm} unit="km" />
+                <StatCard label="TERRITORY" value={totalTerritoryKm2} unit="km²" />
+              </View>
+
+              {/* Character Class Card */}
+              <View style={styles.panelCard}>
+                <Text style={styles.panelTitle}>CHARACTER CLASS</Text>
+                <View style={styles.characterRow}>
+                  <Text style={styles.characterClassEmoji}>{emoji}</Text>
+                  <View style={styles.characterInfo}>
+                    <Text style={[styles.characterNameText, { color }]}>{characterType.toUpperCase()}</Text>
+                    <Text style={styles.characterDescText}>
+                      {characterType === 'scout' && '⚡ Scout: Especializes in speed claims and agile coordinate captures.'}
+                      {characterType === 'warrior' && '🛡️ Warrior: Defends grids with strength claims and decay reductions.'}
+                      {characterType === 'ninja' && '🥷 Ninja: Specializes in stealth captures and fast strikes.'}
+                      {characterType === 'mage' && '🧙 Mage: Wizard claims with 15% larger territory radius scopes.'}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              {/* Trophies Section */}
+              <View style={styles.panelCard}>
+                <Text style={styles.panelTitle}>UNLOCKED TROPHIES ({trophies.length})</Text>
+                {trophies.length === 0 ? (
+                  <Text style={styles.noTrophiesText}>Complete runs to unlock achievements!</Text>
                 ) : (
-                  <View style={styles.avatarPlaceholder}>
-                    <Text style={styles.avatarEmoji}>{emoji}</Text>
+                  <View style={styles.trophiesGrid}>
+                    {trophies.map(t => (
+                      <View key={t.id} style={styles.trophyItem}>
+                        <Text style={styles.trophyEmoji}>{t.emoji}</Text>
+                        <Text style={styles.trophyName}>{t.name}</Text>
+                        <Text style={styles.trophyDesc} numberOfLines={2}>{t.desc}</Text>
+                      </View>
+                    ))}
                   </View>
                 )}
+              </View>
+
+              {/* Run History list */}
+              <View style={styles.panelCard}>
+                <Text style={styles.panelTitle}>RUN LOGS</Text>
+                {runs.length === 0 ? (
+                  <Text style={styles.noTrophiesText}>No runs completed yet.</Text>
+                ) : (
+                  runs.map((run, i) => (
+                    <TouchableOpacity
+                      key={run.id}
+                      style={styles.runRowItem}
+                      onPress={() => handleViewRunDetails(run.id)}
+                      activeOpacity={0.8}
+                    >
+                      <View style={[styles.runIndexBadge, { backgroundColor: color + '15' }]}>
+                        <Text style={[styles.runIndexBadgeText, { color }]}>#{runs.length - i}</Text>
+                      </View>
+                      <View style={styles.runRowInfo}>
+                        <Text style={styles.runRowDistance}>{(run.distance_meters / 1000).toFixed(2)} km</Text>
+                        <Text style={styles.runRowDate}>{formatDate(run.created_at)}</Text>
+                      </View>
+                      <Text style={styles.runRowArrow}>→</Text>
+                    </TouchableOpacity>
+                  ))
+                )}
+              </View>
+
+              {/* Logout Button */}
+              <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
+                <Text style={styles.logoutButtonText}>↩ LOG OUT</Text>
               </TouchableOpacity>
             </View>
-
-            {/* Pencil edit icon on banner */}
-            <TouchableOpacity
-              style={styles.editPencil}
-              onPress={() => setEditModalVisible(true)}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.editPencilText}>✏️</Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* ── User Details Block ── */}
-          <View style={styles.detailsBlock}>
-            <Text style={styles.displayName}>{displayName.toUpperCase()}</Text>
-            
-            <View style={styles.countryRow}>
-              <Text style={styles.flagEmoji}>🇮🇳</Text>
-              <Text style={styles.countryName}>India</Text>
-            </View>
-
-            <Text style={[styles.bioText, !stats?.bio && { color: '#8A8A8A', fontStyle: 'italic' }]}>
-              {bioText}
-            </Text>
-
-            <View style={styles.followersRow}>
-              <Text style={styles.followersText}>0 FOLLOWERS</Text>
-              <Text style={styles.divider}>|</Text>
-              <Text style={styles.followersText}>0 FOLLOWING</Text>
-            </View>
-
-            <TouchableOpacity
-              style={styles.viewFullProfileBtn}
-              onPress={() => setEditModalVisible(true)}
-              activeOpacity={0.85}
-            >
-              <Text style={styles.viewFullProfileText}>EDIT PROFILE   →</Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* ── Timeframe Switcher ── */}
-          <View style={styles.timeframeRow}>
-            {(['all', 'month', 'week'] as const).map((t) => (
-              <TouchableOpacity
-                key={t}
-                style={[
-                  styles.timeframeBtn,
-                  timeframe === t && [styles.timeframeBtnActive, { backgroundColor: color, borderColor: color }],
-                ]}
-                onPress={() => setTimeframe(t)}
-                activeOpacity={0.8}
-              >
-                <Text
-                  style={[
-                    styles.timeframeBtnText,
-                    timeframe === t && styles.timeframeBtnTextActive,
-                  ]}
-                >
-                  {t === 'all' ? 'ALL TIME' : t === 'month' ? 'LAST 30 DAYS' : 'THIS WEEK'}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          {/* ── Stats Summary cards ── */}
-          <View style={styles.statsRow}>
-            <StatCard label="RUNS" value={String(displayRunsCount)} unit="sessions" />
-            <StatCard label="DISTANCE" value={displayDistanceKm} unit="km total" />
-            <StatCard label="TERRITORY" value={totalTerritoryKm2} unit="km²" />
-          </View>
-
-          {/* ── Arena Rank & Progression Card ── */}
-          <View style={styles.arenaCard}>
-            <Text style={styles.arenaCardTitle}>RUNWARS CHAMPIONSHIP RANK</Text>
-            <View style={styles.arenaBox}>
-              <View style={styles.arenaHeader}>
-                <View>
-                  <Text style={[styles.arenaLevel, { color }]}>LEVEL {level}</Text>
-                  <Text style={styles.arenaTitle}>{rankTitle.toUpperCase()}</Text>
+          ) : (
+            /* ===== POSTS TAB CONTENT ===== */
+            <View style={styles.tabContent}>
+              {myPosts.length === 0 ? (
+                <View style={styles.emptyContainer}>
+                  <Text style={styles.emptyEmojiText}>🖼️</Text>
+                  <Text style={styles.emptyTitleText}>No posts yet.</Text>
+                  <Text style={styles.emptySubtitleText}>Compose a post on the Social Feed page to see it here!</Text>
                 </View>
-                <View style={[styles.arenaPointsBox, { backgroundColor: color + '15' }]}>
-                  <Text style={[styles.arenaPointsText, { color }]}>{xp} XP</Text>
-                </View>
-              </View>
-              
-              <View style={styles.progressBarBg}>
-                <View style={[styles.progressBarFill, { backgroundColor: color, width: `${xpProgress * 100}%` }]} />
-              </View>
-              
-              <View style={styles.progressLabelRow}>
-                <Text style={styles.progressSub}>{currentLevelXp} / 100 XP TO LEVEL {level + 1}</Text>
-                <Text style={styles.progressPercent}>{Math.round(xpProgress * 100)}%</Text>
-              </View>
-            </View>
-          </View>
-
-          {/* ── Character Class Showcase Card ── */}
-          <View style={styles.classCard}>
-            <Text style={styles.classCardTitle}>ACTIVE CHARACTER CLASS</Text>
-            <View style={[styles.classBox, { borderColor: color + '30', backgroundColor: color + '08' }]}>
-              <Text style={styles.classEmoji}>{emoji}</Text>
-              <View style={styles.classInfo}>
-                <Text style={[styles.className, { color }]}>{characterType.toUpperCase()}</Text>
-                <Text style={styles.classDesc}>
-                  {characterType === 'scout' && '⚡ Scout: Specializes in speed. Gains 10% faster GPS coordinates and agile territory capture rates.'}
-                  {characterType === 'warrior' && '🛡️ Warrior: Defends territory with high strength. Reduces decay rate and strengthens defensive claim zones.'}
-                  {characterType === 'ninja' && '🥷 Ninja: Stealth and quick strikes. Undetected when passing borders, allowing sneak attacks.'}
-                  {characterType === 'mage' && '🧙 Mage: Wizard zone expansions. Uses special mana claims to increase territory range by 15%.'}
-                </Text>
-              </View>
-            </View>
-          </View>
-
-
-
-          {/* ── Run History ── */}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>RUN HISTORY</Text>
-            {runs.length === 0 ? (
-              <View style={styles.emptyHistory}>
-                <Text style={styles.emptyHistoryText}>No runs yet — get out there! 🏃</Text>
-              </View>
-            ) : (
-              runs.map((run, i) => (
-                <TouchableOpacity
-                  key={run.id}
-                  style={styles.runRow}
-                  onPress={() => handleViewRunDetails(run.id)}
-                  activeOpacity={0.8}
-                >
-                  <View style={[styles.runIndex, { backgroundColor: color + '15' }]}>
-                    <Text style={[styles.runIndexText, { color }]}>#{runs.length - i}</Text>
+              ) : (
+                myPosts.map((post) => (
+                  <View key={post.id} style={styles.myPostCard}>
+                    <View style={styles.postCardHeader}>
+                      <Text style={styles.postCardDate}>{formatDate(post.created_at)}</Text>
+                      <TouchableOpacity onPress={() => handleDeletePost(post.id)}>
+                        <Text style={styles.deletePostText}>🗑️ Delete</Text>
+                      </TouchableOpacity>
+                    </View>
+                    <Text style={styles.postCardContent}>{post.content}</Text>
+                    {post.image_url ? (
+                      <Image source={{ uri: post.image_url }} style={styles.postCardImage} />
+                    ) : null}
+                    <View style={styles.postCardFooter}>
+                      <Text style={styles.postCardFootText}>❤️ {post.likes_count} likes</Text>
+                      <Text style={styles.postCardFootText}>💬 {post.comments_count} comments</Text>
+                    </View>
                   </View>
-                  <View style={styles.runInfo}>
-                    <Text style={styles.runDist}>{(run.distance_meters / 1000).toFixed(2)} km</Text>
-                    <Text style={styles.runDate}>{formatDate(run.created_at)}</Text>
-                  </View>
-                  <Text style={styles.historyArrow}>→</Text>
-                </TouchableOpacity>
-              ))
-            )}
-          </View>
+                ))
+              )}
+            </View>
+          )}
 
-          {/* ── Logout ── */}
-          <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout} activeOpacity={0.8}>
-            <Text style={styles.logoutText}>↩   LOG OUT</Text>
-          </TouchableOpacity>
-
-          <View style={{ height: 60 }} />
+          <View style={{ height: 40 }} />
         </ScrollView>
       )}
 
-      <Modal
-        visible={editModalVisible}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setEditModalVisible(false)}
-      >
-        <KeyboardAvoidingView 
+      {/* Edit Profile Modal */}
+      <Modal visible={editModalVisible} animationType="slide" transparent>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           style={styles.modalOverlay}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
@@ -528,50 +551,43 @@ export default function ProfileScreen() {
             </View>
 
             <ScrollView contentContainerStyle={styles.modalScroll}>
-              {/* Avatar Selection */}
               <TouchableOpacity style={styles.modalAvatarContainer} onPress={pickImage}>
                 {editAvatarUrl ? (
-                  <Image source={{ uri: editAvatarUrl }} style={styles.modalAvatarImage as any} resizeMode="cover" />
+                  <Image source={{ uri: editAvatarUrl }} style={styles.modalAvatarImage} />
                 ) : (
                   <View style={styles.modalAvatarPlaceholder}>
                     <Text style={styles.modalAvatarEmoji}>{CHARACTER_EMOJI[editCharacter as CharacterType] || '🏃'}</Text>
-                    <Text style={styles.modalAvatarLabel}>TAP TO CHOOSE PHOTO</Text>
+                    <Text style={styles.modalAvatarLabel}>TAP TO EDIT PHOTO</Text>
                   </View>
                 )}
               </TouchableOpacity>
 
-              {/* Display Name Input */}
               <Text style={styles.inputLabel}>DISPLAY NAME</Text>
               <TextInput
                 style={styles.textInput}
                 value={editDisplayName}
                 onChangeText={setEditDisplayName}
                 placeholder="Enter display name"
-                placeholderTextColor="#A0A0A0"
+                placeholderTextColor="#4A4A6A"
               />
 
-              {/* Bio Input */}
               <Text style={styles.inputLabel}>BIO</Text>
               <TextInput
                 style={[styles.textInput, { height: 80, textAlignVertical: 'top', paddingTop: 10 }]}
                 value={editBio}
                 onChangeText={setEditBio}
                 placeholder="Write a bio about yourself..."
-                placeholderTextColor="#A0A0A0"
-                multiline={true}
+                placeholderTextColor="#4A4A6A"
+                multiline
                 numberOfLines={3}
               />
 
-              {/* Character Type Picker */}
               <Text style={styles.inputLabel}>CHARACTER CLASS</Text>
               <View style={styles.pickerRow}>
                 {(['scout', 'warrior', 'ninja', 'mage'] as const).map((char) => (
                   <TouchableOpacity
                     key={char}
-                    style={[
-                      styles.pickerBox,
-                      editCharacter === char && styles.pickerBoxActive,
-                    ]}
+                    style={[styles.pickerBox, editCharacter === char && styles.pickerBoxActive]}
                     onPress={() => setEditCharacter(char)}
                   >
                     <Text style={styles.pickerEmoji}>{CHARACTER_EMOJI[char]}</Text>
@@ -580,7 +596,6 @@ export default function ProfileScreen() {
                 ))}
               </View>
 
-              {/* Color Selector */}
               <Text style={styles.inputLabel}>TERRITORY COLOR</Text>
               <View style={styles.colorRow}>
                 {['#FF4D4D', '#FF8C00', '#FFD700', '#00FA9A', '#00CED1', '#1E90FF', '#7B68EE', '#DA70D6'].map((col) => (
@@ -589,19 +604,14 @@ export default function ProfileScreen() {
                     style={[
                       styles.colorCircle,
                       { backgroundColor: col },
-                      editColor === col && { borderColor: '#000000', borderWidth: 3 },
+                      editColor === col && { borderColor: '#FFFFFF', borderWidth: 3 },
                     ]}
                     onPress={() => setEditColor(col)}
                   />
                 ))}
               </View>
 
-              {/* Action Buttons */}
-              <TouchableOpacity
-                style={styles.saveBtn}
-                onPress={handleSaveProfile}
-                activeOpacity={0.85}
-              >
+              <TouchableOpacity style={styles.saveBtn} onPress={handleSaveProfile}>
                 <Text style={styles.saveBtnText}>SAVE CHANGES</Text>
               </TouchableOpacity>
             </ScrollView>
@@ -609,13 +619,8 @@ export default function ProfileScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* ── Past Run Detail Modal ── */}
-      <Modal
-        visible={detailModalVisible}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setDetailModalVisible(false)}
-      >
+      {/* Past Run Detail Modal */}
+      <Modal visible={detailModalVisible} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
@@ -721,218 +726,104 @@ export default function ProfileScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F8F9FA' },
+  container: { flex: 1, backgroundColor: '#0D0D1A' },
   loadingCenter: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  scroll: { paddingBottom: 40 },
 
-  // Adidas Banner
-  bannerContainer: {
-    height: 180,
-    backgroundColor: '#E0E0E0',
-    position: 'relative',
+  // Profile header
+  profileHeaderContainer: {
+    alignItems: 'center',
+    paddingVertical: 36,
+    paddingHorizontal: 20,
+    backgroundColor: '#111124',
+    borderBottomWidth: 1,
+    borderBottomColor: '#1E1E38',
   },
-  bannerImage: {
-    width: '100%',
-    height: '100%',
-  },
-  avatarContainer: {
-    position: 'absolute',
-    bottom: -50,
-    left: 20,
-    width: 104,
-    height: 104,
-    borderRadius: 52,
-    backgroundColor: '#FFFFFF',
+  avatarBorder: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    borderWidth: 3,
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: '#0D0D1A',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
     elevation: 6,
   },
-  avatarPhoto: {
-    width: 94,
-    height: 94,
-    borderRadius: 47,
+  profileImage: {
+    width: 86,
+    height: 86,
+    borderRadius: 43,
   },
   avatarPlaceholder: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 47,
-    borderWidth: 3,
-    backgroundColor: '#F5F5F7',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  avatarEmoji: { fontSize: 50 },
-  editPencil: {
-    position: 'absolute',
-    top: 15,
-    right: 15,
-    backgroundColor: 'rgba(255, 255, 255, 0.85)',
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+    width: 86,
+    height: 86,
+    borderRadius: 43,
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: '#16162A',
   },
-  editPencilText: { fontSize: 18 },
-
-  // Profile Details Block
-  detailsBlock: {
-    paddingTop: 64,
-    paddingHorizontal: 20,
-    backgroundColor: '#FFFFFF',
-    paddingBottom: 24,
-    borderBottomWidth: 1,
-    borderBottomColor: '#EBEBEB',
-  },
-  displayName: {
-    fontSize: 26,
+  avatarEmoji: { fontSize: 44 },
+  displayNameText: {
+    fontSize: 22,
     fontWeight: '900',
-    color: '#000000',
-    letterSpacing: 0.5,
-  },
-  countryRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 4,
-  },
-  flagEmoji: { fontSize: 16 },
-  countryName: { fontSize: 14, color: '#6A6A6A', marginLeft: 6, fontWeight: '500' },
-  bioText: {
-    fontSize: 14,
-    color: '#4A4A4A',
-    marginTop: 12,
-    lineHeight: 20,
-  },
-  followersRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    color: '#FFFFFF',
     marginTop: 16,
-    gap: 8,
-  },
-  followersText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#000000',
     letterSpacing: 0.5,
-    borderBottomWidth: 1.5,
-    borderBottomColor: '#000000',
-    paddingBottom: 2,
   },
-  divider: { color: '#8A8A8A', fontSize: 12 },
-  viewFullProfileBtn: {
-    marginTop: 20,
-    backgroundColor: '#000000',
-    paddingVertical: 14,
-    alignItems: 'center',
-    borderRadius: 4,
-  },
-  viewFullProfileText: {
-    color: '#FFFFFF',
-    fontWeight: '900',
+  bioText: {
     fontSize: 13,
-    letterSpacing: 1.5,
+    color: '#8A8AAB',
+    textAlign: 'center',
+    marginTop: 8,
+    lineHeight: 18,
+    paddingHorizontal: 12,
   },
-
-  // Stats Row
-  statsRow: {
-    flexDirection: 'row',
+  editProfileBtn: {
+    marginTop: 16,
     paddingHorizontal: 16,
-    paddingVertical: 20,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#00BFFF',
+    backgroundColor: '#00BFFF11',
+  },
+  editProfileBtnText: {
+    color: '#00BFFF',
+    fontSize: 12,
+    fontWeight: '800',
   },
 
-  avatarTouchable: {
-    width: 94,
-    height: 94,
-    borderRadius: 47,
-    overflow: 'hidden',
-    justifyContent: 'center',
-    alignItems: 'center',
+  // Level progress
+  progressContainer: {
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    backgroundColor: '#16162A',
+    borderBottomWidth: 1,
+    borderBottomColor: '#2A2A4A44',
   },
-
-  // Timeframe Switcher
-  timeframeRow: {
+  progressHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    marginTop: 18,
-    gap: 8,
-  },
-  timeframeBtn: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 6,
-    borderWidth: 1.5,
-    borderColor: '#E0E0E0',
-    backgroundColor: '#FFFFFF',
     alignItems: 'center',
-    justifyContent: 'center',
   },
-  timeframeBtnActive: {
-    borderWidth: 1.5,
-  },
-  timeframeBtnText: {
-    fontSize: 10,
+  progressLevelText: {
+    fontSize: 14,
     fontWeight: '900',
-    color: '#8A8A8A',
-    letterSpacing: 0.5,
-  },
-  timeframeBtnTextActive: {
     color: '#FFFFFF',
   },
-
-  // Arena Rank Card
-  arenaCard: {
-    paddingHorizontal: 20,
-    marginBottom: 20,
-  },
-  arenaCardTitle: {
-    fontSize: 11,
-    fontWeight: '900',
-    color: '#8A8A8A',
-    letterSpacing: 1.5,
-    marginBottom: 10,
-  },
-  arenaBox: {
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1.5,
-    borderColor: '#E0E0E0',
-    borderRadius: 8,
-    padding: 16,
-  },
-  arenaHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  arenaLevel: {
-    fontSize: 18,
-    fontWeight: '900',
-    letterSpacing: 0.5,
-  },
-  arenaTitle: {
-    fontSize: 11,
-    fontWeight: '900',
-    color: '#000000',
-    marginTop: 2,
-    letterSpacing: 1,
-  },
-  arenaPointsBox: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 12,
-  },
-  arenaPointsText: {
+  progressXpText: {
     fontSize: 13,
     fontWeight: '900',
   },
   progressBarBg: {
     height: 8,
-    backgroundColor: '#EBEBEB',
+    backgroundColor: '#0D0D1A',
     borderRadius: 4,
-    marginTop: 16,
+    marginTop: 10,
     overflow: 'hidden',
   },
   progressBarFill: {
@@ -946,127 +837,181 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   progressSub: {
-    fontSize: 9,
-    color: '#8A8A8A',
+    fontSize: 10,
+    color: '#4A4A6A',
     fontWeight: '800',
-    letterSpacing: 0.5,
   },
   progressPercent: {
-    fontSize: 10,
-    color: '#000000',
+    fontSize: 11,
+    color: '#FFFFFF',
     fontWeight: '900',
   },
 
-  // Class Card
-  classCard: {
-    paddingHorizontal: 20,
-    marginBottom: 24,
-  },
-  classCardTitle: {
-    fontSize: 11,
-    fontWeight: '900',
-    color: '#8A8A8A',
-    letterSpacing: 1.5,
-    marginBottom: 10,
-  },
-  classBox: {
+  // Dual Tabs
+  tabContainer: {
     flexDirection: 'row',
-    borderWidth: 1.5,
-    borderRadius: 8,
-    padding: 16,
-    alignItems: 'center',
-    gap: 16,
+    backgroundColor: '#111124',
+    borderBottomWidth: 1.5,
+    borderBottomColor: '#1E1E38',
   },
-  classEmoji: {
-    fontSize: 44,
-  },
-  classInfo: {
+  tabButton: {
     flex: 1,
+    paddingVertical: 16,
+    alignItems: 'center',
   },
-  className: {
-    fontSize: 16,
-    fontWeight: '900',
+  tabButtonActive: {
+    borderBottomWidth: 3,
+    borderBottomColor: '#00BFFF',
+  },
+  tabButtonText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#4A4A6A',
     letterSpacing: 0.5,
   },
-  classDesc: {
-    fontSize: 12,
-    color: '#4A4A4A',
-    lineHeight: 18,
-    marginTop: 4,
-    fontWeight: '500',
+  tabButtonTextActive: {
+    color: '#00BFFF',
   },
 
-  // Section History
-  section: { paddingHorizontal: 20, marginTop: 10 },
-  sectionTitle: {
+  tabContent: { padding: 16 },
+
+  // Stats Grid Card
+  statsGridRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 16,
+  },
+  statCard: {
+    flex: 1,
+    backgroundColor: '#16162A',
+    borderRadius: 12,
+    paddingVertical: 16,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#2A2A4A',
+  },
+  statCardValue: { fontSize: 24, fontWeight: '900', color: '#FFFFFF' },
+  statCardUnit: { fontSize: 9, color: '#4A4A6A', fontWeight: '800', marginTop: 1 },
+  statCardLabel: { fontSize: 10, color: '#8A8AAB', fontWeight: '800', marginTop: 4, letterSpacing: 0.5 },
+
+  // Panels
+  panelCard: {
+    backgroundColor: '#16162A',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#2A2A4A',
+    padding: 16,
+    marginBottom: 16,
+  },
+  panelTitle: {
     fontSize: 11,
     fontWeight: '900',
-    color: '#8A8A8A',
+    color: '#4A4A6A',
     letterSpacing: 1.5,
     marginBottom: 12,
   },
-  emptyHistory: {
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1.5,
-    borderColor: '#E0E0E0',
+
+  characterRow: { flexDirection: 'row', alignItems: 'center', gap: 16 },
+  characterClassEmoji: { fontSize: 44 },
+  characterInfo: { flex: 1 },
+  characterNameText: { fontSize: 16, fontWeight: '900' },
+  characterDescText: { fontSize: 12, color: '#8A8AAB', lineHeight: 18, marginTop: 4 },
+
+  // Trophies Grid
+  noTrophiesText: { color: '#4A4A6A', fontSize: 12, textAlign: 'center', paddingVertical: 12 },
+  trophiesGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  trophyItem: {
+    width: '48%',
+    backgroundColor: '#0D0D1A',
     borderRadius: 8,
-    padding: 24,
+    borderWidth: 1,
+    borderColor: '#2A2A4A',
+    padding: 10,
     alignItems: 'center',
   },
-  emptyHistoryText: { color: '#8A8A8A', fontSize: 13 },
-  runRow: {
+  trophyEmoji: { fontSize: 32 },
+  trophyName: { fontSize: 12, fontWeight: '900', color: '#FFFFFF', marginTop: 6 },
+  trophyDesc: { fontSize: 9, color: '#4A4A6A', textAlign: 'center', marginTop: 2, lineHeight: 12 },
+
+  // History Log Items
+  runRowItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1.5,
-    borderColor: '#E0E0E0',
+    backgroundColor: '#0D0D1A',
+    borderWidth: 1,
+    borderColor: '#2A2A4A',
     borderRadius: 8,
-    padding: 14,
+    padding: 12,
     marginBottom: 8,
-    gap: 14,
+    gap: 12,
   },
-  runIndex: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+  runIndexBadge: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  runIndexText: { fontSize: 13, fontWeight: '900' },
-  runInfo: { flex: 1 },
-  runDist: { fontSize: 18, fontWeight: '900', color: '#000000' },
-  runDate: { fontSize: 12, color: '#8A8A8A', marginTop: 2, fontWeight: '500' },
-  historyArrow: { fontSize: 18, color: '#8A8A8A', fontWeight: 'bold' },
+  runIndexBadgeText: { fontSize: 12, fontWeight: '900' },
+  runRowInfo: { flex: 1 },
+  runRowDistance: { fontSize: 16, fontWeight: '900', color: '#FFFFFF' },
+  runRowDate: { fontSize: 11, color: '#4A4A6A', marginTop: 2 },
+  runRowArrow: { fontSize: 16, color: '#4A4A6A', fontWeight: 'bold' },
 
-  logoutBtn: {
-    marginHorizontal: 20,
-    marginTop: 24,
-    paddingVertical: 16,
-    borderRadius: 4,
-    backgroundColor: '#FFEBEE',
-    borderWidth: 1.5,
-    borderColor: '#FFCDD2',
+  // My Posts Tab
+  myPostCard: {
+    backgroundColor: '#16162A',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#2A2A4A',
+    padding: 16,
+    marginBottom: 16,
+  },
+  postCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  postCardDate: { fontSize: 11, color: '#4A4A6A', fontWeight: '600' },
+  deletePostText: { fontSize: 11, color: '#FF3B30', fontWeight: '700' },
+  postCardContent: { fontSize: 14, color: '#CCCCCC', marginTop: 10, lineHeight: 20 },
+  postCardImage: { width: '100%', height: 200, borderRadius: 8, marginTop: 10, backgroundColor: '#0D0D1A' },
+  postCardFooter: { flexDirection: 'row', gap: 14, marginTop: 12, borderTopWidth: 1, borderTopColor: '#2A2A4A44', paddingTop: 10 },
+  postCardFootText: { fontSize: 11, color: '#4A4A6A', fontWeight: '600' },
+
+  emptyContainer: { alignItems: 'center', paddingVertical: 80 },
+  emptyEmojiText: { fontSize: 64, marginBottom: 16 },
+  emptyTitleText: { color: '#FFFFFF', fontSize: 16, fontWeight: '800' },
+  emptySubtitleText: { color: '#4A4A6A', fontSize: 12, marginTop: 6, textAlign: 'center', paddingHorizontal: 20 },
+
+  logoutButton: {
+    marginHorizontal: 4,
+    marginTop: 16,
+    paddingVertical: 14,
+    borderRadius: 8,
+    backgroundColor: '#FF3B3015',
+    borderWidth: 1,
+    borderColor: '#FF3B3044',
     alignItems: 'center',
   },
-  logoutText: {
-    color: '#C62828',
+  logoutButtonText: {
+    color: '#FF3B30',
     fontWeight: '900',
-    fontSize: 14,
+    fontSize: 13,
     letterSpacing: 1.5,
   },
 
-  // Modal Editing style
+  // Modals Overlay & Styling
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    backgroundColor: '#000000AA',
     justifyContent: 'flex-end',
   },
   modalContent: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#111124',
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
     maxHeight: '90%',
     paddingBottom: 40,
+    borderWidth: 1.5,
+    borderColor: '#2A2A4A',
+    borderBottomWidth: 0,
   },
   modalHeader: {
     flexDirection: 'row',
@@ -1074,19 +1019,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 20,
     borderBottomWidth: 1,
-    borderBottomColor: '#EBEBEB',
+    borderBottomColor: '#2A2A4A',
   },
-  modalTitle: { fontSize: 16, fontWeight: '900', color: '#000000', letterSpacing: 1 },
-  closeBtn: { fontSize: 20, color: '#8A8A8A', fontWeight: 'bold' },
+  modalTitle: { fontSize: 16, fontWeight: '900', color: '#FFFFFF', letterSpacing: 1 },
+  closeBtn: { fontSize: 20, color: '#8A8AAB', fontWeight: 'bold' },
   modalScroll: { padding: 20 },
+
   modalAvatarContainer: {
     alignSelf: 'center',
     width: 100,
     height: 100,
     borderRadius: 50,
-    backgroundColor: '#F5F5F7',
-    borderWidth: 1.5,
-    borderColor: '#E0E0E0',
+    backgroundColor: '#0D0D1A',
+    borderWidth: 2,
+    borderColor: '#2A2A4A',
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
@@ -1099,65 +1045,56 @@ const styles = StyleSheet.create({
     padding: 10,
   },
   modalAvatarEmoji: { fontSize: 40 },
-  modalAvatarLabel: { fontSize: 8, color: '#8A8A8A', fontWeight: 'bold', marginTop: 4, textAlign: 'center' },
-  inputLabel: { fontSize: 10, fontWeight: '900', color: '#8A8A8A', letterSpacing: 1, marginBottom: 8, marginTop: 12 },
+  modalAvatarLabel: { fontSize: 8, color: '#4A4A6A', fontWeight: 'bold', marginTop: 4, textAlign: 'center' },
+  inputLabel: { fontSize: 10, fontWeight: '900', color: '#4A4A6A', letterSpacing: 1, marginBottom: 8, marginTop: 12 },
   textInput: {
-    backgroundColor: '#F5F5F7',
+    backgroundColor: '#0D0D1A',
     borderWidth: 1,
-    borderColor: '#E0E0E0',
-    borderRadius: 4,
+    borderColor: '#2A2A4A',
+    borderRadius: 8,
     padding: 12,
     fontSize: 14,
-    color: '#000000',
+    color: '#FFFFFF',
     fontWeight: '500',
   },
   pickerRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 },
   pickerBox: {
     flex: 1,
-    backgroundColor: '#F5F5F7',
+    backgroundColor: '#0D0D1A',
     borderWidth: 1,
-    borderColor: '#E0E0E0',
-    borderRadius: 4,
+    borderColor: '#2A2A4A',
+    borderRadius: 8,
     paddingVertical: 10,
     alignItems: 'center',
     marginHorizontal: 3,
   },
   pickerBoxActive: {
-    borderColor: '#000000',
+    borderColor: '#00BFFF',
     borderWidth: 2,
-    backgroundColor: '#EAEAEA',
+    backgroundColor: '#00BFFF15',
   },
   pickerEmoji: { fontSize: 22 },
-  pickerLabel: { fontSize: 8, fontWeight: 'bold', marginTop: 4 },
+  pickerLabel: { fontSize: 8, fontWeight: 'bold', marginTop: 4, color: '#8A8AAB' },
   colorRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 4 },
   colorCircle: {
     width: 32,
     height: 32,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#E0E0E0',
+    borderColor: '#2A2A4A',
   },
   saveBtn: {
-    backgroundColor: '#000000',
-    borderRadius: 4,
-    paddingVertical: 16,
+    backgroundColor: '#00BFFF',
+    borderRadius: 8,
+    paddingVertical: 14,
     alignItems: 'center',
     marginTop: 32,
   },
-  saveBtnText: { color: '#FFFFFF', fontWeight: '900', fontSize: 14, letterSpacing: 1.5 },
+  saveBtnText: { color: '#0D0D1A', fontWeight: '900', fontSize: 14, letterSpacing: 1.5 },
 
-  // Past Run Detail styles
-  modalLoadingCenter: {
-    paddingVertical: 80,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  modalLoadingText: {
-    fontSize: 14,
-    color: '#8A8A8A',
-    fontWeight: '600',
-    marginTop: 12,
-  },
+  // Past Run Details Modal
+  modalLoadingCenter: { paddingVertical: 80, alignItems: 'center', justifyContent: 'center' },
+  modalLoadingText: { fontSize: 14, color: '#00BFFF', fontWeight: '600', marginTop: 12 },
   detailCardShot: {
     backgroundColor: '#0D0D1A',
     borderRadius: 12,
@@ -1172,73 +1109,15 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
     marginBottom: 16,
   },
-  detailCardTitle: {
-    fontSize: 11,
-    fontWeight: '900',
-    color: '#8A8A8A',
-    letterSpacing: 2,
-  },
-  detailCardDate: {
-    fontSize: 16,
-    fontWeight: '900',
-    color: '#FFFFFF',
-    marginTop: 4,
-  },
-  detailMapContainer: {
-    height: 180,
-    borderRadius: 8,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: '#2A2A4A',
-    marginBottom: 16,
-  },
-  detailMap: {
-    ...StyleSheet.absoluteFill,
-  },
-  detailStatsGrid: {
-    flexDirection: 'row',
-    marginBottom: 12,
-    gap: 12,
-  },
-  detailStatBox: {
-    flex: 1,
-    backgroundColor: '#16162A',
-    borderWidth: 1,
-    borderColor: '#2A2A4A',
-    borderRadius: 8,
-    padding: 12,
-  },
-  detailStatVal: {
-    fontSize: 20,
-    fontWeight: '900',
-    color: '#FFFFFF',
-  },
-  detailStatLbl: {
-    fontSize: 8,
-    fontWeight: '900',
-    color: '#8A8A8A',
-    letterSpacing: 1,
-    marginTop: 4,
-  },
-  modalShareRow: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 20,
-  },
-  modalShareBtn: {
-    flex: 1,
-    paddingVertical: 14,
-    borderRadius: 8,
-    alignItems: 'center',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  modalShareBtnText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: '900',
-    letterSpacing: 1,
-  },
+  detailCardTitle: { fontSize: 11, fontWeight: '900', color: '#4A4A6A', letterSpacing: 2 },
+  detailCardDate: { fontSize: 16, fontWeight: '900', color: '#FFFFFF', marginTop: 4 },
+  detailMapContainer: { height: 180, borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: '#2A2A4A', marginBottom: 16 },
+  detailMap: { ...StyleSheet.absoluteFill },
+  detailStatsGrid: { flexDirection: 'row', marginBottom: 12, gap: 12 },
+  detailStatBox: { flex: 1, backgroundColor: '#16162A', borderWidth: 1, borderColor: '#2A2A4A', borderRadius: 8, padding: 12 },
+  detailStatVal: { fontSize: 20, fontWeight: '900', color: '#FFFFFF' },
+  detailStatLbl: { fontSize: 8, fontWeight: '900', color: '#4A4A6A', letterSpacing: 1, marginTop: 4 },
+  modalShareRow: { flexDirection: 'row', gap: 12, marginBottom: 20 },
+  modalShareBtn: { flex: 1, paddingVertical: 14, borderRadius: 8, alignItems: 'center', elevation: 4 },
+  modalShareBtnText: { color: '#FFFFFF', fontSize: 12, fontWeight: '900', letterSpacing: 1 },
 });
