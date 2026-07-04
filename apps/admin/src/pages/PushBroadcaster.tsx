@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useAdminAuth } from '../context/AdminAuthContext';
 import { Rocket, Megaphone } from 'lucide-react';
 
-const baseUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3000';
+const baseUrl = import.meta.env.VITE_BACKEND_URL || window.location.origin;
 
 export default function PushBroadcaster() {
   const { token } = useAdminAuth();

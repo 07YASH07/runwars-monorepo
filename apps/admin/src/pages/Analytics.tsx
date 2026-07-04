@@ -26,7 +26,7 @@ ChartJS.register(
   Legend
 );
 
-const baseUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3000';
+const baseUrl = import.meta.env.VITE_BACKEND_URL || window.location.origin;
 
 export default function Analytics() {
   const { token } = useAdminAuth();

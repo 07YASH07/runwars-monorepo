@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useAdminAuth } from '../context/AdminAuthContext';
 import { Search, Trash2, Edit } from 'lucide-react';
 
-const baseUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3000';
+const baseUrl = import.meta.env.VITE_BACKEND_URL || window.location.origin;
 
 export default function UserInspector() {
   const { token } = useAdminAuth();

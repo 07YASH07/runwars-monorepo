@@ -14,7 +14,7 @@ export default function AuthModal() {
     // Simple ping to backend to verify the token
     try {
       // In production, the backend might be on the same host, but in dev it might be localhost:3000
-      const baseUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3000';
+      const baseUrl = import.meta.env.VITE_BACKEND_URL || window.location.origin;
       const res = await fetch(`${baseUrl}/api/admin/health-detail`, {
         headers: { 'x-admin-token': secret }
       });

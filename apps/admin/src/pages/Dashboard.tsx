@@ -4,7 +4,7 @@ import { io, Socket } from 'socket.io-client';
 import { MapContainer, TileLayer, Polygon, CircleMarker, Tooltip } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 
-const baseUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3000';
+const baseUrl = import.meta.env.VITE_BACKEND_URL || window.location.origin;
 
 export default function Dashboard() {
   const { token } = useAdminAuth();
