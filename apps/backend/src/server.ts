@@ -26,7 +26,10 @@ app.use(cors());
 app.use(morgan('dev'));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
-app.use('/admin', express.static(path.join(__dirname, '../public/admin')));
+app.use('/admin', express.static(path.join(__dirname, '../../admin/dist')));
+app.get('/admin/*', (req, res) => {
+  res.sendFile(path.join(__dirname, '../../admin/dist/index.html'));
+});
 
 const server = http.createServer(app);
 
