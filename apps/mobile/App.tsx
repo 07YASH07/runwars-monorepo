@@ -27,9 +27,7 @@ import { CHARACTER_EMOJI } from '@runwars/shared';
 import type { PostRunParams } from '@/screens/PostRunScreen';
 
 // ─── Auth Screens ─────────────────────────────────────────────────────────────
-import LoginScreen from '@/screens/auth/LoginScreen';
-import RegisterScreen from '@/screens/auth/RegisterScreen';
-import CharacterSelectScreen from '@/screens/auth/CharacterSelectScreen';
+import AuthScreen from '@/screens/AuthScreen';
 
 // ─── Main Screens ─────────────────────────────────────────────────────────────
 import FeedScreen from '@/screens/FeedScreen';
@@ -49,12 +47,8 @@ const MainTab = createBottomTabNavigator<MainTabParamList>();
 
 function AuthNavigator() {
   return (
-    <AuthStack.Navigator
-      screenOptions={{ headerShown: false, animation: 'fade' }}
-    >
-      <AuthStack.Screen name="Login" component={LoginScreen} />
-      <AuthStack.Screen name="Register" component={RegisterScreen} />
-      <AuthStack.Screen name="CharacterSelect" component={CharacterSelectScreen} />
+    <AuthStack.Navigator screenOptions={{ headerShown: false, animation: 'fade' }}>
+      <AuthStack.Screen name="Login" component={AuthScreen} />
     </AuthStack.Navigator>
   );
 }
@@ -161,15 +155,15 @@ function MainNavigator() {
 // ─── Root Router ──────────────────────────────────────────────────────────────
 
 function RootRouter() {
-  const { user, loading } = useAuth();
+  const { user, isLoading } = useAuth();
 
   React.useEffect(() => {
-    if (!loading) {
+    if (!isLoading) {
       SplashScreen.hideAsync().catch(() => {});
     }
-  }, [loading]);
+  }, [isLoading]);
 
-  if (loading) {
+  if (isLoading) {
     return (
       <View style={loadingStyles.container}>
         <Text style={loadingStyles.logo}>🏃</Text>

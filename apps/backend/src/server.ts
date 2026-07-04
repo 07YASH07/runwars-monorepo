@@ -6,6 +6,9 @@ import dotenv from 'dotenv';
 import morgan from 'morgan';
 import path from 'path';
 import { Pool } from 'pg';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import { Expo } from 'expo-server-sdk';
 import {
   LivePlayerState,
   Territory,
@@ -516,7 +519,8 @@ io.on('connection', async (socket: Socket) => {
       }
 
       // Send push notification to loser
-      const loserPushToken = pushTokens.get(loser);
+      const loserTokenRes = await pool.query('SELECT expo_push_token FROM users WHERE id = $1', [loser]);
+      const loserPushToken = loserTokenRes.rows[0]?.expo_push_token;
       const winnerPlayer = livePlayers.get(winner);
       if (loserPushToken) {
         await sendPushNotification(
@@ -613,9 +617,9 @@ app.get('/api/feed', async (req, res) => {
           SELECT
             p.id::text AS id,
             p.user_id AS user_id,
-            u.display_name AS user_name,
-            u.avatar_url AS user_avatar,
-            u.color AS user_color,
+            u.display_name AS display_name,
+            u.character_type AS character_type,
+            u.color AS color,
             NULL AS title,
             p.content AS content,
             p.image_url AS image_url,
@@ -642,9 +646,9 @@ app.get('/api/feed', async (req, res) => {
           SELECT
             'ann_' || a.id AS id,
             'admin' AS user_id,
-            'Admin' AS user_name,
-            NULL AS user_avatar,
-            '#FFD700' AS user_color,
+            'Admin' AS display_name,
+            'warrior' AS character_type,
+            '#FFD700' AS color,
             a.title AS title,
             a.body AS content,
             NULL AS image_url,
@@ -883,12 +887,14 @@ app.get('/api/profile/:userId', async (req, res) => {
       [userId]
     );
 
-    const friendsRes = await pool.query(
+    const followersRes = await pool.query(
       `SELECT u.id, u.display_name, u.avatar_url, u.character_type, u.color, u.bio
-       FROM friends f
-       JOIN users u ON u.id = f.friend_id
-       WHERE f.user_id = $1`,
-      [userId]
+       FROM followers f JOIN users u ON u.id = f.follower_id WHERE f.following_id = $1`, [userId]
+    );
+
+    const followingRes = await pool.query(
+      `SELECT u.id, u.display_name, u.avatar_url, u.character_type, u.color, u.bio
+       FROM followers f JOIN users u ON u.id = f.following_id WHERE f.follower_id = $1`, [userId]
     );
 
     res.json({
@@ -909,77 +915,74 @@ app.get('/api/profile/:userId', async (req, res) => {
         total_zones: zonesRes.rows[0]?.total_zones || 0
       },
       posts: postsRes.rows,
-      friends: friendsRes.rows
+      followers: followersRes.rows,
+      following: followingRes.rows
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Friends API: Add Friend
-app.post('/api/friends/add', async (req, res) => {
-  const { userId, friendId } = req.body;
-  if (!userId || !friendId) {
-    return res.status(400).json({ error: 'Missing userId or friendId' });
-  }
-  if (userId === friendId) {
-    return res.status(400).json({ error: 'Cannot add yourself as a friend' });
-  }
+// Followers API: Follow User
+app.post('/api/followers/follow', async (req, res) => {
+  const { userId, followingId } = req.body;
+  if (!userId || !followingId) return res.status(400).json({ error: 'Missing userId or followingId' });
+  if (userId === followingId) return res.status(400).json({ error: 'Cannot follow yourself' });
+  
   try {
     await pool.query(
-      `INSERT INTO friends (user_id, friend_id)
-       VALUES ($1, $2), ($2, $1)
-       ON CONFLICT (user_id, friend_id) DO NOTHING`,
-      [userId, friendId]
+      `INSERT INTO followers (follower_id, following_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+      [userId, followingId]
     );
 
     try {
       const userRes = await pool.query('SELECT display_name FROM users WHERE id = $1', [userId]);
-      const friendToken = pushTokens.get(friendId);
-      if (friendToken) {
+      const targetTokenRes = await pool.query('SELECT expo_push_token FROM users WHERE id = $1', [followingId]);
+      
+      const pushToken = targetTokenRes.rows[0]?.expo_push_token;
+      if (pushToken && Expo.isExpoPushToken(pushToken)) {
         const adderName = userRes.rows[0]?.display_name || 'A runner';
-        await sendPushNotification(friendToken, '🤝 New Friend!', `${adderName} added you as a friend!`);
+        await expo.sendPushNotificationsAsync([{
+          to: pushToken,
+          sound: 'default',
+          title: '🤝 New Follower!',
+          body: `${adderName} started following you!`,
+        }]);
       }
     } catch (pushErr) {
-      console.error('[Push] Friend notification failed:', pushErr);
+      console.error('[Push] Follow notification failed:', pushErr);
     }
-
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Friends API: Remove Friend
-app.post('/api/friends/remove', async (req, res) => {
-  const { userId, friendId } = req.body;
-  if (!userId || !friendId) {
-    return res.status(400).json({ error: 'Missing userId or friendId' });
-  }
+// Followers API: Unfollow User
+app.post('/api/followers/unfollow', async (req, res) => {
+  const { userId, followingId } = req.body;
+  if (!userId || !followingId) return res.status(400).json({ error: 'Missing userId or followingId' });
   try {
-    await pool.query(
-      `DELETE FROM friends
-       WHERE (user_id = $1 AND friend_id = $2) OR (user_id = $2 AND friend_id = $1)`,
-      [userId, friendId]
-    );
+    await pool.query(`DELETE FROM followers WHERE follower_id = $1 AND following_id = $2`, [userId, followingId]);
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Friends API: Get friends list
-app.get('/api/friends/:userId', async (req, res) => {
+// Followers API: Get Followers & Following
+app.get('/api/followers/:userId', async (req, res) => {
   const { userId } = req.params;
   try {
-    const result = await pool.query(
+    const followersRes = await pool.query(
       `SELECT u.id, u.display_name, u.avatar_url, u.character_type, u.color, u.bio
-       FROM friends f
-       JOIN users u ON u.id = f.friend_id
-       WHERE f.user_id = $1`,
-      [userId]
+       FROM followers f JOIN users u ON u.id = f.follower_id WHERE f.following_id = $1`, [userId]
     );
-    res.json(result.rows);
+    const followingRes = await pool.query(
+      `SELECT u.id, u.display_name, u.avatar_url, u.character_type, u.color, u.bio
+       FROM followers f JOIN users u ON u.id = f.following_id WHERE f.follower_id = $1`, [userId]
+    );
+    res.json({ followers: followersRes.rows, following: followingRes.rows });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -1018,14 +1021,13 @@ app.post('/api/shop/unlock-color', async (req, res) => {
 
 // Fetch nearby runners recommendation
 app.get('/api/community/nearby', async (req, res) => {
-  const { userId } = req.query;
+  const { userId, lat, lng } = req.query;
   if (!userId) {
     return res.status(400).json({ error: 'Missing userId query parameter' });
   }
 
   try {
     const activeRunners = Array.from(livePlayers.values());
-    const currentUser = activeRunners.find(p => p.userId === userId);
     
     // Helper function to calculate Haversine distance in km
     const getDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
@@ -1040,20 +1042,22 @@ app.get('/api/community/nearby', async (req, res) => {
     };
 
     let recommended = [];
+    const clientLat = parseFloat(lat as string);
+    const clientLng = parseFloat(lng as string);
 
-    if (currentUser && currentUser.currentPosition) {
+    if (!isNaN(clientLat) && !isNaN(clientLng)) {
       recommended = activeRunners
         .filter(p => p.userId !== userId && p.currentPosition)
         .map(p => {
           const dist = getDistance(
-            currentUser.currentPosition!.latitude,
-            currentUser.currentPosition!.longitude,
+            clientLat,
+            clientLng,
             p.currentPosition!.latitude,
             p.currentPosition!.longitude
           );
           return { ...p, distanceKm: parseFloat(dist.toFixed(2)) };
         })
-        .filter(p => p.distanceKm <= 15.0)
+        .filter(p => p.distanceKm <= 50.0)
         .sort((a, b) => a.distanceKm - b.distanceKm);
     }
 
@@ -1546,6 +1550,122 @@ app.get('/api/admin/analytics', adminAuthMiddleware, async (req, res) => {
 
 
 const PORT = process.env.PORT || 3000;
+
+const expo = new Expo();
+const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_runwars_key_123';
+
+// Auth: Register
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const { email, password, displayName, characterType, color } = req.body;
+    if (!email || !password || !displayName) return res.status(400).json({ error: 'Missing fields' });
+    
+    const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
+    if (existing.rowCount && existing.rowCount > 0) return res.status(400).json({ error: 'Email in use' });
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    const id = 'usr_' + Date.now().toString(36);
+    
+    await pool.query(
+      `INSERT INTO users (id, email, display_name, character_type, color, password_hash)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [id, email, displayName, characterType || 'scout', color || '#00BFFF', passwordHash]
+    );
+
+    const token = jwt.sign({ userId: id }, JWT_SECRET, { expiresIn: '30d' });
+    res.json({ user: { id, display_name: displayName, character_type: characterType, color }, token });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Auth: Login
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ error: 'Missing fields' });
+    
+    const userRes = await pool.query('SELECT * FROM users WHERE email = $1 OR id = $1', [email]);
+    if (!userRes.rowCount || userRes.rowCount === 0) return res.status(404).json({ error: 'User not found' });
+    
+    const user = userRes.rows[0];
+    const isValid = user.password_hash ? await bcrypt.compare(password, user.password_hash) : true; // Fallback for old mock users
+    if (!isValid) return res.status(401).json({ error: 'Invalid password' });
+
+    const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '30d' });
+    res.json({ 
+      user: { id: user.id, display_name: user.display_name, character_type: user.character_type, color: user.color }, 
+      token 
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Register Push Token
+app.post('/api/users/push-token', async (req, res) => {
+  const { userId, token } = req.body;
+  if (!userId || !token) return res.status(400).json({ error: 'Missing userId or token' });
+  try {
+    await pool.query('UPDATE users SET expo_push_token = $1 WHERE id = $2', [token, userId]);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Follow User
+app.post('/api/followers/follow', async (req, res) => {
+  const { userId, followingId } = req.body;
+  if (!userId || !followingId) return res.status(400).json({ error: 'Missing userId or followingId' });
+  if (userId === followingId) return res.status(400).json({ error: 'Cannot follow yourself' });
+  
+  try {
+    await pool.query(
+      `INSERT INTO followers (follower_id, following_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+      [userId, followingId]
+    );
+
+    try {
+      const userRes = await pool.query('SELECT display_name FROM users WHERE id = $1', [userId]);
+      const targetTokenRes = await pool.query('SELECT expo_push_token FROM users WHERE id = $1', [followingId]);
+      
+      const pushToken = targetTokenRes.rows[0]?.expo_push_token;
+      if (pushToken && Expo.isExpoPushToken(pushToken)) {
+        const adderName = userRes.rows[0]?.display_name || 'A runner';
+        await expo.sendPushNotificationsAsync([{
+          to: pushToken,
+          sound: 'default',
+          title: '🤝 New Follower!',
+          body: `${adderName} started following you!`,
+        }]);
+      }
+    } catch (pushErr) {
+      console.error('[Push] Follow notification failed:', pushErr);
+    }
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Arena Coin Boost
+app.post('/api/territory/boost', async (req, res) => {
+  const { userId } = req.body;
+  if (!userId) return res.status(400).json({ error: 'Missing userId' });
+  try {
+    const userRes = await pool.query('SELECT coins FROM users WHERE id = $1', [userId]);
+    const coins = userRes.rows[0]?.coins || 0;
+    if (coins < 50) {
+      return res.status(400).json({ error: 'Not enough Arena Coins. You need 50.' });
+    }
+    
+    await pool.query('UPDATE users SET coins = coins - 50 WHERE id = $1', [userId]);
+    res.json({ success: true, remainingCoins: coins - 50 });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 server.listen(PORT, () => {
   console.log(`🚀 [Backend] Server running on http://localhost:${PORT}`);

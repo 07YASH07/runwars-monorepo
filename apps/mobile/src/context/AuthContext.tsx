@@ -1,32 +1,9 @@
-/**
- * AuthContext — Firebase Authentication state management for RunWars.
- *
- * Provides: user, firebaseUser, loading, signIn, signUp, signOut, signInWithGoogle
- *
- * Wraps the entire app. Any screen can call useAuth() to access auth state.
- */
-import React, {
-  createContext,
-  useContext,
-  useState,
-  useEffect,
-  useCallback,
-  ReactNode,
-} from 'react';
-import {
-  User as FirebaseUser,
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-  signOut as firebaseSignOut,
-  onAuthStateChanged,
-  GoogleAuthProvider,
-  signInWithCredential,
-  updateProfile,
-} from 'firebase/auth';
-import { auth } from '@/config/firebase';
-import type { CharacterType } from '@runwars/shared';
-import { getRandomTerritoryColor } from '@runwars/shared';
+import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
+import * as Notifications from 'expo-notifications';
+import { Platform } from 'react-native';
+import type { CharacterType } from '@runwars/shared';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -37,278 +14,195 @@ interface AuthUser {
   photoURL: string | null;
   characterType?: CharacterType;
   color?: string;
+  token?: string;
 }
 
 interface AuthContextValue {
   user: AuthUser | null;
-  firebaseUser: FirebaseUser | null;
-  loading: boolean;
-  signIn: (email: string, password: string) => Promise<void>;
-  signUp: (
-    email: string,
-    password: string,
-    displayName: string
-  ) => Promise<FirebaseUser>;
-  signOut: () => Promise<void>;
-  signInWithGoogle: (idToken: string) => Promise<void>;
-  setCharacterAndColor: (
-    character: CharacterType,
-    color: string
-  ) => Promise<void>;
+  isLoading: boolean;
+  login: (email: string, password: string) => Promise<void>;
+  register: (email: string, password: string, displayName: string, characterType: string, color: string) => Promise<void>;
+  logout: () => Promise<void>;
+  setCharacterAndColor: (character: CharacterType, color: string) => Promise<void>;
 }
 
 // ─── Context ──────────────────────────────────────────────────────────────────
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.2.2:3000';
 
 // ─── Provider ─────────────────────────────────────────────────────────────────
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
   const [user, setUser] = useState<AuthUser | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(true);
 
-  // Map FirebaseUser → AuthUser
-  const mapUser = useCallback(
-    (fbUser: FirebaseUser | null): AuthUser | null => {
-      if (!fbUser) return null;
-      return {
-        uid: fbUser.uid,
-        email: fbUser.email,
-        displayName: fbUser.displayName,
-        photoURL: fbUser.photoURL,
-      };
-    },
-    []
-  );
-
-  // Subscribe to Firebase auth state changes & load persisted session
+  // Restore session
   useEffect(() => {
-    const checkPersistedUser = async () => {
+    const restoreSession = async () => {
       try {
-        const isPlaceholderKey = !process.env.EXPO_PUBLIC_FIREBASE_API_KEY || 
-          process.env.EXPO_PUBLIC_FIREBASE_API_KEY === 'YOUR_FIREBASE_API_KEY' || 
-          process.env.EXPO_PUBLIC_FIREBASE_API_KEY.includes('DEMO_REPLACE');
-
-        if (isPlaceholderKey) {
-          const stored = await AsyncStorage.getItem('@runwars:mock_user');
-          if (stored) {
-            const parsed = JSON.parse(stored);
-            const apiUrl = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.2.2:3000';
-            try {
-              const profileRes = await fetch(`${apiUrl}/profile/${parsed.uid}`, {
-                headers: { 'Bypass-Tunnel-Reminder': 'true' }
+        const storedToken = await SecureStore.getItemAsync('runwars_jwt');
+        const storedUser = await AsyncStorage.getItem('@runwars:user');
+        if (storedToken && storedUser) {
+          const parsedUser = JSON.parse(storedUser);
+          parsedUser.token = storedToken;
+          
+          // Fetch latest profile
+          try {
+            const profileRes = await fetch(`${API_URL}/api/profile/${parsedUser.uid}`, {
+              headers: { 'Bypass-Tunnel-Reminder': 'true' }
+            });
+            if (profileRes.ok) {
+              const profileData = await profileRes.json();
+              setUser({
+                ...parsedUser,
+                displayName: profileData.user.display_name,
+                characterType: profileData.user.character_type,
+                color: profileData.user.color,
+                photoURL: profileData.user.avatar_url,
               });
-              if (profileRes.ok) {
-                const profileData = await profileRes.json();
-                setUser({
-                  uid: parsed.uid,
-                  email: parsed.email,
-                  displayName: profileData.display_name || parsed.displayName,
-                  photoURL: profileData.avatar_url || parsed.photoURL,
-                  characterType: profileData.character_type || 'scout',
-                  color: profileData.color || '#00BFFF',
-                });
-              } else {
-                setUser(parsed);
-              }
-            } catch {
-              setUser(parsed);
+            } else {
+              setUser(parsedUser);
             }
+          } catch {
+            setUser(parsedUser);
           }
         }
       } catch (err) {
-        console.error('[AuthContext] Failed to load persisted mock user:', err);
+        console.error('[AuthContext] Restore session failed:', err);
       } finally {
-        setLoading(false);
+        setIsLoading(false);
       }
     };
+    restoreSession();
+  }, []);
 
-    const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
-      if (fbUser) {
-        setFirebaseUser(fbUser);
-        const apiUrl = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.2.2:3000';
+  // Register Push Token when user is logged in
+  useEffect(() => {
+    if (user && user.uid) {
+      const registerPushToken = async () => {
         try {
-          const profileRes = await fetch(`${apiUrl}/profile/${fbUser.uid}`, {
-            headers: { 'Bypass-Tunnel-Reminder': 'true' }
-          });
-          if (profileRes.ok) {
-            const profileData = await profileRes.json();
-            setUser({
-              uid: fbUser.uid,
-              email: fbUser.email,
-              displayName: profileData.display_name || fbUser.displayName || 'Runner',
-              photoURL: profileData.avatar_url || fbUser.photoURL,
-              characterType: profileData.character_type || 'scout',
-              color: profileData.color || '#00BFFF',
-            });
-          } else {
-            setUser({
-              uid: fbUser.uid,
-              email: fbUser.email,
-              displayName: fbUser.displayName || 'Runner',
-              photoURL: fbUser.photoURL,
-              characterType: 'scout',
-              color: '#00BFFF',
+          if (Platform.OS === 'android') {
+            await Notifications.setNotificationChannelAsync('default', {
+              name: 'default',
+              importance: Notifications.AndroidImportance.MAX,
+              vibrationPattern: [0, 250, 250, 250],
+              lightColor: '#FF231F7C',
             });
           }
-        } catch {
-          setUser(mapUser(fbUser));
+
+          const { status: existingStatus } = await Notifications.getPermissionsAsync();
+          let finalStatus = existingStatus;
+          if (existingStatus !== 'granted') {
+            const { status } = await Notifications.requestPermissionsAsync();
+            finalStatus = status;
+          }
+          if (finalStatus !== 'granted') {
+            return;
+          }
+          const tokenData = await Notifications.getExpoPushTokenAsync({ projectId: 'your-eas-project-id' });
+          const token = tokenData.data;
+          
+          await fetch(`${API_URL}/api/users/push-token`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: user.uid, token })
+          });
+        } catch (e) {
+          console.error('[AuthContext] Push token error:', e);
         }
-        setLoading(false);
-      } else {
-        const isPlaceholderKey = !process.env.EXPO_PUBLIC_FIREBASE_API_KEY || 
-          process.env.EXPO_PUBLIC_FIREBASE_API_KEY === 'YOUR_FIREBASE_API_KEY' || 
-          process.env.EXPO_PUBLIC_FIREBASE_API_KEY.includes('DEMO_REPLACE');
-        if (isPlaceholderKey) {
-          checkPersistedUser();
-        } else {
-          setFirebaseUser(null);
-          setUser(null);
-          setLoading(false);
-        }
-      }
-    });
+      };
+      registerPushToken();
+    }
+  }, [user?.uid]);
 
-    return unsubscribe;
-  }, [mapUser]);
-
-  const signIn = useCallback(
-    async (email: string, password: string): Promise<void> => {
-      const isPlaceholderKey = !process.env.EXPO_PUBLIC_FIREBASE_API_KEY || 
-        process.env.EXPO_PUBLIC_FIREBASE_API_KEY === 'YOUR_FIREBASE_API_KEY' || 
-        process.env.EXPO_PUBLIC_FIREBASE_API_KEY.includes('DEMO_REPLACE');
-        
-      if (isPlaceholderKey || (email.toLowerCase().trim() === 'test@test.com' && password === 'password')) {
-        const mockUser = {
-          uid: `mock-user-${Date.now()}`,
-          email: email.trim(),
-          displayName: email.split('@')[0] || 'Test Runner',
-          photoURL: null,
-          characterType: 'scout' as CharacterType,
-          color: getRandomTerritoryColor(),
-        };
-        setUser(mockUser);
-        await AsyncStorage.setItem('@runwars:mock_user', JSON.stringify(mockUser));
-        return;
-      }
-
-      try {
-        await signInWithEmailAndPassword(auth, email, password);
-      } catch (error) {
-        throw new Error(
-          `Sign in failed: ${error instanceof Error ? error.message : 'Unknown error'}`
-        );
-      }
-    },
-    []
-  );
-
-  const signUp = useCallback(
-    async (
-      email: string,
-      password: string,
-      displayName: string
-    ): Promise<FirebaseUser> => {
-      const isPlaceholderKey = !process.env.EXPO_PUBLIC_FIREBASE_API_KEY || 
-        process.env.EXPO_PUBLIC_FIREBASE_API_KEY === 'YOUR_FIREBASE_API_KEY' || 
-        process.env.EXPO_PUBLIC_FIREBASE_API_KEY.includes('DEMO_REPLACE');
-
-      if (isPlaceholderKey) {
-        const mockUser = {
-          uid: `mock-user-${Date.now()}`,
-          email: email.trim(),
-          displayName: displayName,
-          photoURL: null,
-          characterType: 'scout' as CharacterType,
-          color: getRandomTerritoryColor(),
-        };
-        setUser(mockUser);
-        await AsyncStorage.setItem('@runwars:mock_user', JSON.stringify(mockUser));
-        return { uid: mockUser.uid, email, displayName } as any;
-      }
-
-      try {
-        const credential = await createUserWithEmailAndPassword(
-          auth,
-          email,
-          password
-        );
-        await updateProfile(credential.user, { displayName });
-        return credential.user;
-      } catch (error) {
-        throw new Error(
-          `Registration failed: ${error instanceof Error ? error.message : 'Unknown error'}`
-        );
-      }
-    },
-    []
-  );
-
-  const signOut = useCallback(async (): Promise<void> => {
+  const login = useCallback(async (email: string, password: string): Promise<void> => {
+    setIsLoading(true);
     try {
-      await AsyncStorage.removeItem('@runwars:mock_user');
-      await firebaseSignOut(auth);
-      setUser(null);
-      setFirebaseUser(null);
-    } catch (error) {
-      throw new Error(
-        `Sign out failed: ${error instanceof Error ? error.message : 'Unknown error'}`
-      );
+      const res = await fetch(`${API_URL}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Login failed');
+      
+      const loggedUser: AuthUser = {
+        uid: data.user.id,
+        email,
+        displayName: data.user.display_name,
+        characterType: data.user.character_type,
+        color: data.user.color,
+        photoURL: null,
+        token: data.token,
+      };
+
+      await SecureStore.setItemAsync('runwars_jwt', data.token);
+      await AsyncStorage.setItem('@runwars:user', JSON.stringify(loggedUser));
+      setUser(loggedUser);
+    } finally {
+      setIsLoading(false);
     }
   }, []);
 
-  const signInWithGoogle = useCallback(
-    async (idToken: string): Promise<void> => {
-      try {
-        const credential = GoogleAuthProvider.credential(idToken);
-        await signInWithCredential(auth, credential);
-      } catch (error) {
-        throw new Error(
-          `Google sign-in failed: ${error instanceof Error ? error.message : 'Unknown error'}`
-        );
-      }
-    },
-    []
-  );
-
-  const setCharacterAndColor = useCallback(
-    async (character: CharacterType, color: string): Promise<void> => {
-      setUser((prev) => {
-        if (!prev) return null;
-        const updated = { ...prev, characterType: character, color };
-        const isPlaceholderKey = !process.env.EXPO_PUBLIC_FIREBASE_API_KEY || 
-          process.env.EXPO_PUBLIC_FIREBASE_API_KEY === 'YOUR_FIREBASE_API_KEY' || 
-          process.env.EXPO_PUBLIC_FIREBASE_API_KEY.includes('DEMO_REPLACE');
-        if (isPlaceholderKey) {
-          AsyncStorage.setItem('@runwars:mock_user', JSON.stringify(updated)).catch(err => 
-            console.error('[AuthContext] Failed to persist character update:', err)
-          );
-        }
-        return updated;
+  const register = useCallback(async (email: string, password: string, displayName: string, characterType: string, color: string): Promise<void> => {
+    setIsLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/api/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password, displayName, characterType, color })
       });
-    },
-    []
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Registration failed');
+      
+      const loggedUser: AuthUser = {
+        uid: data.user.id,
+        email,
+        displayName: data.user.display_name,
+        characterType: data.user.character_type,
+        color: data.user.color,
+        photoURL: null,
+        token: data.token,
+      };
+
+      await SecureStore.setItemAsync('runwars_jwt', data.token);
+      await AsyncStorage.setItem('@runwars:user', JSON.stringify(loggedUser));
+      setUser(loggedUser);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  const logout = useCallback(async (): Promise<void> => {
+    setIsLoading(true);
+    try {
+      await SecureStore.deleteItemAsync('runwars_jwt');
+      await AsyncStorage.removeItem('@runwars:user');
+      setUser(null);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  const setCharacterAndColor = useCallback(async (character: CharacterType, color: string): Promise<void> => {
+    setUser(prev => {
+      if (!prev) return null;
+      const updated = { ...prev, characterType: character, color };
+      AsyncStorage.setItem('@runwars:user', JSON.stringify(updated));
+      return updated;
+    });
+  }, []);
+
+  return (
+    <AuthContext.Provider value={{ user, isLoading, login, register, logout, setCharacterAndColor }}>
+      {children}
+    </AuthContext.Provider>
   );
-
-  const value: AuthContextValue = {
-    user,
-    firebaseUser,
-    loading,
-    signIn,
-    signUp,
-    signOut,
-    signInWithGoogle,
-    setCharacterAndColor,
-  };
-
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth(): AuthContextValue {
   const ctx = useContext(AuthContext);
-  if (!ctx) {
-    throw new Error('useAuth must be used within an <AuthProvider>');
-  }
+  if (!ctx) throw new Error('useAuth must be used within an <AuthProvider>');
   return ctx;
 }

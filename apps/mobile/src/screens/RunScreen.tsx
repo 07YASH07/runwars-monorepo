@@ -567,9 +567,41 @@ export default function RunScreen() {
               {activeZoneOwner.name.toUpperCase()}'S TERRITORY
             </Text>
           </View>
-          <View style={[styles.zoneIndicatorBadge, { backgroundColor: activeZoneOwner.color }]}>
+          <TouchableOpacity
+            style={[styles.zoneIndicatorBadge, { backgroundColor: activeZoneOwner.color }]}
+            onPress={() => {
+              Alert.alert(
+                '⚔️ BATTLE INITIATED',
+                `You are challenging ${activeZoneOwner.name} for this territory!\n\nPay 50 Arena Coins to activate 2x Capture Speed?`,
+                [
+                  { text: 'Normal Capture', style: 'cancel' },
+                  { 
+                    text: 'Pay 50 Coins (Boost)', 
+                    style: 'destructive', 
+                    onPress: async () => {
+                      try {
+                        const res = await fetch(`${API_URL}/api/territory/boost`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ userId: user?.uid })
+                        });
+                        const data = await res.json();
+                        if (res.ok) {
+                          Alert.alert('Boost Activated!', `Capture speed doubled! Remaining coins: ${data.remainingCoins}`);
+                        } else {
+                          Alert.alert('Boost Failed', data.error || 'Not enough coins.');
+                        }
+                      } catch (e) {
+                        Alert.alert('Error', 'Network error connecting to server.');
+                      }
+                    } 
+                  }
+                ]
+              );
+            }}
+          >
             <Text style={styles.zoneIndicatorBadgeText}>BATTLE</Text>
-          </View>
+          </TouchableOpacity>
         </View>
       )}
 

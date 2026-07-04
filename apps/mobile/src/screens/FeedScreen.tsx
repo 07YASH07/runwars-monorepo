@@ -17,6 +17,8 @@ import {
 } from 'react-native';
 import { CHARACTER_EMOJI, CharacterType } from '@runwars/shared';
 import { useAuth } from '@/context/AuthContext';
+import * as ImagePicker from 'expo-image-picker';
+import { socketService } from '@/services/SocketService';
 
 const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.2.2:3000';
 
@@ -63,6 +65,13 @@ interface ProfileData {
     bio: string;
   };
   stats: ProfileStats;
+  friends: {
+    id: string;
+    display_name: string;
+    avatar_url?: string;
+    character_type?: string;
+    color?: string;
+  }[];
 }
 
 function timeAgo(dateStr: string): string {
@@ -89,6 +98,24 @@ export default function FeedScreen() {
   const [postContent, setPostContent] = useState('');
   const [postImage, setPostImage] = useState('');
   const [submittingPost, setSubmittingPost] = useState(false);
+
+  const pickPostImage = async () => {
+    const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (permissionResult.granted === false) {
+      Alert.alert('Permission Required', 'Camera roll access is needed to upload a photo.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [4, 3],
+      quality: 0.4,
+      base64: true,
+    });
+    if (!result.canceled && result.assets && result.assets[0]?.base64) {
+      setPostImage(`data:image/jpeg;base64,${result.assets[0].base64}`);
+    }
+  };
 
   const [commentDrawerVisible, setCommentDrawerVisible] = useState(false);
   const [selectedPostId, setSelectedPostId] = useState<string | null>(null);
@@ -121,6 +148,13 @@ export default function FeedScreen() {
 
   useEffect(() => {
     fetchFeed();
+    const handleFeedUpdate = () => {
+      fetchFeed();
+    };
+    socketService.onEvent('feed:updated', handleFeedUpdate);
+    return () => {
+      socketService.offEvent('feed:updated', handleFeedUpdate);
+    };
   }, [fetchFeed]);
 
   const onRefresh = useCallback(() => {
@@ -223,6 +257,28 @@ export default function FeedScreen() {
     }
   };
 
+  const [submittingFriend, setSubmittingFriend] = useState(false);
+
+  const toggleFriend = async (targetUserId: string, isCurrentlyFriend: boolean) => {
+    if (!user) return;
+    setSubmittingFriend(true);
+    try {
+      const endpoint = isCurrentlyFriend ? '/api/friends/remove' : '/api/friends/add';
+      const res = await fetch(`${API_URL}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: user.uid, friendId: targetUserId })
+      });
+      if (res.ok) {
+        openUserProfile(targetUserId);
+      }
+    } catch (err) {
+      console.error('[Feed] Failed to toggle friend:', err);
+    } finally {
+      setSubmittingFriend(false);
+    }
+  };
+
   const openUserProfile = async (targetUserId: string) => {
     setProfileVisible(true);
     setLoadingProfile(true);
@@ -309,6 +365,18 @@ export default function FeedScreen() {
       ? item.content?.slice(0, 140) + '...'
       : item.content;
 
+    let lastTap = 0;
+    const handleImgPress = () => {
+      const now = Date.now();
+      if (now - lastTap < 300) {
+        if (!item.liked_by_user) {
+          handleLike(item);
+        }
+      } else {
+        lastTap = now;
+      }
+    };
+
     return (
       <View style={styles.card}>
         <View style={styles.cardHeader}>
@@ -343,7 +411,9 @@ export default function FeedScreen() {
         </View>
 
         {item.image_url ? (
-          <Image source={{ uri: item.image_url }} style={styles.postImage} resizeMode="cover" />
+          <TouchableOpacity activeOpacity={0.9} onPress={handleImgPress}>
+            <Image source={{ uri: item.image_url }} style={styles.postImage} resizeMode="cover" />
+          </TouchableOpacity>
         ) : null}
 
         <View style={styles.countsRow}>
@@ -433,14 +503,19 @@ export default function FeedScreen() {
             />
 
             <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Attach Image URL (Optional)</Text>
-              <TextInput
-                style={styles.imageInput}
-                placeholder="https://example.com/run.jpg"
-                placeholderTextColor="#4A4A6A"
-                value={postImage}
-                onChangeText={setPostImage}
-              />
+              <Text style={styles.inputLabel}>Attach Image (Optional)</Text>
+              {postImage ? (
+                <View style={styles.selectedImageContainer}>
+                  <Image source={{ uri: postImage }} style={styles.selectedImagePreview} />
+                  <TouchableOpacity style={styles.clearImageBtn} onPress={() => setPostImage('')}>
+                    <Text style={styles.clearImageText}>✕ Remove Image</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <TouchableOpacity style={styles.imagePickerBtn} onPress={pickPostImage}>
+                  <Text style={styles.imagePickerBtnText}>🖼️ Choose Photo from Gallery</Text>
+                </TouchableOpacity>
+              )}
             </View>
 
             <TouchableOpacity
@@ -567,6 +642,22 @@ export default function FeedScreen() {
                     <Text style={styles.gridStatLbl}>ZONES</Text>
                   </View>
                 </View>
+
+                {profileData.user.id !== user?.uid && (
+                  <TouchableOpacity
+                    style={[styles.friendBtn, profileData.friends?.some((f: any) => f.id === user?.uid) && styles.friendBtnActive]}
+                    disabled={submittingFriend}
+                    onPress={() => toggleFriend(profileData.user.id, !!profileData.friends?.some((f: any) => f.id === user?.uid))}
+                  >
+                    {submittingFriend ? (
+                      <ActivityIndicator color="#FFFFFF" size="small" />
+                    ) : (
+                      <Text style={[styles.friendBtnText, profileData.friends?.some((f: any) => f.id === user?.uid) && styles.friendBtnTextActive]}>
+                        {profileData.friends?.some((f: any) => f.id === user?.uid) ? '🤝 Friends' : '➕ Add Friend'}
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                )}
               </>
             ) : (
               <Text style={styles.noCommentsText}>Failed to load profile details.</Text>
@@ -663,4 +754,14 @@ const styles = StyleSheet.create({
   statsGridCol: { alignItems: 'center' },
   gridStatVal: { fontSize: 16, fontWeight: '900', color: '#FFFFFF' },
   gridStatLbl: { fontSize: 9, color: '#4A4A6A', fontWeight: '800', marginTop: 2 },
+  imagePickerBtn: { backgroundColor: '#0D0D1A', borderRadius: 8, borderWidth: 1, borderColor: '#2A2A4A', borderStyle: 'dashed', paddingVertical: 16, alignItems: 'center', justifyContent: 'center' },
+  imagePickerBtnText: { color: '#00BFFF', fontSize: 13, fontWeight: '800' },
+  selectedImageContainer: { alignItems: 'center', gap: 8 },
+  selectedImagePreview: { width: '100%', height: 120, borderRadius: 8, backgroundColor: '#0D0D1A' },
+  clearImageBtn: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 12, backgroundColor: '#FF3B3022' },
+  clearImageText: { color: '#FF3B30', fontSize: 11, fontWeight: '800' },
+  friendBtn: { backgroundColor: '#00BFFF', width: '100%', paddingVertical: 10, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginTop: 16 },
+  friendBtnActive: { backgroundColor: '#2A2A4A', borderWidth: 1, borderColor: '#00BFFF' },
+  friendBtnText: { color: '#0D0D1A', fontWeight: '900', fontSize: 13 },
+  friendBtnTextActive: { color: '#00BFFF' },
 });

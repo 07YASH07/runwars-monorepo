@@ -45,6 +45,30 @@ export default function CommunityScreen() {
   const [profileData, setProfileData] = useState<ProfileData | null>(null);
   const [loadingProfile, setLoadingProfile] = useState(false);
 
+  // Recommended Runners State
+  const [recommendedUsers, setRecommendedUsers] = useState<any[]>([]);
+  const [loadingRecommended, setLoadingRecommended] = useState(true);
+
+  useEffect(() => {
+    if (!user) return;
+    const fetchRecommended = async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/community/nearby?userId=${user.uid}`, {
+          headers: { 'Bypass-Tunnel-Reminder': 'true' }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setRecommendedUsers(data);
+        }
+      } catch (err) {
+        console.error('[Community] Failed to fetch recommended:', err);
+      } finally {
+        setLoadingRecommended(false);
+      }
+    };
+    fetchRecommended();
+  }, [user]);
+
   const filteredPlayers = livePlayers.filter((p) =>
     p.displayName.toLowerCase().includes(searchQuery.toLowerCase())
   );
@@ -140,6 +164,47 @@ export default function CommunityScreen() {
           })
         )}
 
+        {/* Recommended Runners Section */}
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>RECOMMENDED RUNNERS NEARBY</Text>
+        </View>
+
+        {loadingRecommended ? (
+          <View style={styles.emptyContainer}>
+            <ActivityIndicator color="#FF8C00" />
+          </View>
+        ) : recommendedUsers.length === 0 ? (
+          <View style={styles.emptyContainer}>
+            <Text style={styles.emptySub}>No recommendations available right now.</Text>
+          </View>
+        ) : (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.recommendedScroll}>
+            {recommendedUsers.map((recUser, index) => {
+              const recEmoji = CHARACTER_EMOJI[recUser.characterType as CharacterType] || '🏃';
+              const recColor = recUser.color || '#00BFFF';
+              return (
+                <TouchableOpacity
+                  key={recUser.userId || index.toString()}
+                  style={[styles.recCard, { borderColor: recColor + '44' }]}
+                  onPress={() => openUserProfile(recUser.userId)}
+                  activeOpacity={0.8}
+                >
+                  <View style={[styles.recAvatar, { borderColor: recColor, backgroundColor: recColor + '11' }]}>
+                    <Text style={styles.recAvatarEmoji}>{recEmoji}</Text>
+                  </View>
+                  <Text style={styles.recName} numberOfLines={1}>{recUser.displayName?.toUpperCase()}</Text>
+                  <Text style={[styles.recClass, { color: recColor }]}>{recUser.characterType?.toUpperCase() || 'SCOUT'}</Text>
+                  {recUser.distanceKm !== null && recUser.distanceKm !== undefined ? (
+                    <View style={styles.recDistanceBadge}>
+                      <Text style={styles.recDistanceText}>{recUser.distanceKm} km away</Text>
+                    </View>
+                  ) : null}
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        )}
+
         {/* Dynamic community statistics / info */}
         <View style={styles.infoCard}>
           <Text style={styles.infoCardTitle}>⚔️ CONQUER AND CLAIM</Text>
@@ -185,7 +250,6 @@ export default function CommunityScreen() {
 
                 <View style={styles.profileDivider} />
 
-                {/* Grid Stats */}
                 <View style={styles.statsGrid}>
                   <View style={styles.statsGridCol}>
                     <Text style={styles.gridStatVal}>
@@ -202,6 +266,31 @@ export default function CommunityScreen() {
                     <Text style={styles.gridStatLbl}>ZONES</Text>
                   </View>
                 </View>
+
+                {user?.uid !== profileData.user.id && (
+                  <TouchableOpacity
+                    style={[styles.followBtn, { backgroundColor: profileData.user.color }]}
+                    onPress={async () => {
+                      try {
+                        const res = await fetch(`${API_URL}/api/followers/follow`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ userId: user?.uid, followingId: profileData.user.id })
+                        });
+                        if (res.ok) {
+                          alert(`You are now following ${profileData.user.display_name}!`);
+                          setProfileVisible(false);
+                        } else {
+                          alert('Failed to follow user.');
+                        }
+                      } catch (err) {
+                        alert('Network error.');
+                      }
+                    }}
+                  >
+                    <Text style={styles.followBtnText}>+ FOLLOW</Text>
+                  </TouchableOpacity>
+                )}
               </>
             ) : (
               <Text style={styles.noProfileText}>Failed to load profile details.</Text>
@@ -380,6 +469,55 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
+  // Recommended Runners
+  recommendedScroll: {
+    paddingBottom: 10,
+    gap: 12,
+  },
+  recCard: {
+    backgroundColor: '#16162A',
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 16,
+    alignItems: 'center',
+    width: 130,
+  },
+  recAvatar: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  recAvatarEmoji: {
+    fontSize: 24,
+  },
+  recName: {
+    fontSize: 12,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    marginBottom: 2,
+    textAlign: 'center',
+  },
+  recClass: {
+    fontSize: 9,
+    fontWeight: '800',
+    marginBottom: 6,
+  },
+  recDistanceBadge: {
+    backgroundColor: '#2A2A4A',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  recDistanceText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#CCCCCC',
+  },
+
   // Modal Profile styling
   modalOverlay: {
     flex: 1,
@@ -422,4 +560,18 @@ const styles = StyleSheet.create({
   gridStatVal: { fontSize: 16, fontWeight: '900', color: '#FFFFFF' },
   gridStatLbl: { fontSize: 9, color: '#4A4A6A', fontWeight: '800', marginTop: 2 },
   noProfileText: { color: '#4A4A6A', textAlign: 'center' },
+  followBtn: {
+    marginTop: 20,
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 8,
+    width: '100%',
+    alignItems: 'center',
+  },
+  followBtnText: {
+    color: '#0D0D1A',
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 1,
+  },
 });

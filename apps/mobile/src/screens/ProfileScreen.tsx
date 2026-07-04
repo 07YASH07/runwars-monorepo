@@ -27,6 +27,7 @@ import * as ImagePicker from 'expo-image-picker';
 import MapView, { Polyline, PROVIDER_GOOGLE, Marker } from 'react-native-maps';
 import ViewShot from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
+import Svg, { Circle } from 'react-native-svg';
 
 const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.2.2:3000';
 
@@ -39,6 +40,9 @@ interface ProfileStats {
   color: string;
   bio: string;
   avatar_url: string;
+  cover_image_url?: string;
+  coins?: number;
+  unlocked_colors?: string[];
 }
 
 interface RunEntry {
@@ -76,8 +80,10 @@ export default function ProfileScreen() {
   const [stats, setStats] = useState<ProfileStats | null>(null);
   const [runs, setRuns] = useState<RunEntry[]>([]);
   const [myPosts, setMyPosts] = useState<UserPost[]>([]);
+  const [followers, setFollowers] = useState<any[]>([]);
+  const [following, setFollowing] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'stats' | 'posts'>('stats');
+  const [activeTab, setActiveTab] = useState<'stats' | 'posts' | 'followers'>('stats');
 
   // Edit Mode state
   const [editModalVisible, setEditModalVisible] = useState(false);
@@ -86,6 +92,7 @@ export default function ProfileScreen() {
   const [editCharacter, setEditCharacter] = useState('scout');
   const [editColor, setEditColor] = useState('#00BFFF');
   const [editAvatarUrl, setEditAvatarUrl] = useState('');
+  const [editCoverImageUrl, setEditCoverImageUrl] = useState('');
 
   // Past Run Detail states
   const [selectedRun, setSelectedRun] = useState<any>(null);
@@ -188,7 +195,7 @@ export default function ProfileScreen() {
     if (!user?.uid) return;
     try {
       const [profileRes, runsRes, feedRes] = await Promise.all([
-        fetch(`${API_URL}/profile/${user.uid}`, { headers: { 'Bypass-Tunnel-Reminder': 'true' } }),
+        fetch(`${API_URL}/api/profile/${user.uid}`, { headers: { 'Bypass-Tunnel-Reminder': 'true' } }),
         fetch(`${API_URL}/runs/${user.uid}`, { headers: { 'Bypass-Tunnel-Reminder': 'true' } }),
         fetch(`${API_URL}/api/feed?userId=${user.uid}`, { headers: { 'Bypass-Tunnel-Reminder': 'true' } }),
       ]);
@@ -196,12 +203,14 @@ export default function ProfileScreen() {
       const runsData = await runsRes.json();
       const feedData = await feedRes.json();
 
-      setStats(profileData);
+      setStats({ ...profileData.user, ...profileData.stats });
       setRuns(runsData);
+      setFollowers(profileData.followers || []);
+      setFollowing(profileData.following || []);
       
       // Filter feed for only posts created by logged-in user
       const userPosts = feedData
-        .filter((item: any) => item.feed_type === 'post' && item.user_id === user.uid)
+        .filter((item: any) => item.post_type !== 'announcement' && item.user_id === user.uid)
         .map((p: any) => ({
           id: p.id,
           content: p.content,
@@ -213,11 +222,12 @@ export default function ProfileScreen() {
       setMyPosts(userPosts);
 
       // Pre-fill edit inputs
-      setEditDisplayName(profileData.display_name || user.displayName || 'Runner');
-      setEditBio(profileData.bio || '');
-      setEditCharacter(profileData.character_type || user.characterType || 'scout');
-      setEditColor(profileData.color || user.color || '#00BFFF');
-      setEditAvatarUrl(profileData.avatar_url || '');
+      setEditDisplayName(profileData.user.display_name || user.displayName || 'Runner');
+      setEditBio(profileData.user.bio || '');
+      setEditCharacter(profileData.user.character_type || user.characterType || 'scout');
+      setEditColor(profileData.user.color || user.color || '#00BFFF');
+      setEditAvatarUrl(profileData.user.avatar_url || '');
+      setEditCoverImageUrl(profileData.user.cover_image_url || '');
     } catch (err) {
       console.error('[Profile] Failed to fetch:', err);
     } finally {
@@ -248,6 +258,95 @@ export default function ProfileScreen() {
     ]);
   }, []);
 
+  const weeklyData = useMemo(() => {
+    const data = [
+      { label: 'Sun', val: 0 },
+      { label: 'Mon', val: 0 },
+      { label: 'Tue', val: 0 },
+      { label: 'Wed', val: 0 },
+      { label: 'Thu', val: 0 },
+      { label: 'Fri', val: 0 },
+      { label: 'Sat', val: 0 },
+    ];
+    const today = new Date();
+    for (let i = 0; i < 7; i++) {
+      const d = new Date();
+      d.setDate(today.getDate() - i);
+      const dayIndex = d.getDay();
+      const dateStr = d.toDateString();
+      const dayRuns = runs.filter(r => new Date(r.created_at).toDateString() === dateStr);
+      const dayDistanceKm = dayRuns.reduce((sum, r) => sum + (r.distance_meters || 0), 0) / 1000;
+      data[dayIndex].val = parseFloat(dayDistanceKm.toFixed(2));
+    }
+    const dayOrder = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(today.getDate() - i);
+      dayOrder.push(data[d.getDay()]);
+    }
+    return dayOrder;
+  }, [runs]);
+
+  const totalCalories = useMemo(() => {
+    const totalDistanceKm = (stats?.total_distance || 0) / 1000;
+    return Math.round(totalDistanceKm * 70 * 0.8);
+  }, [stats]);
+
+  const shopColors = [
+    { name: 'Neon Gold', hex: '#FFD700' },
+    { name: 'Neon Green', hex: '#00FF00' },
+    { name: 'Orchid Purple', hex: '#DA70D6' },
+    { name: 'Crimson Red', hex: '#DC143C' },
+    { name: 'Cyan Splash', hex: '#00FFFF' },
+  ];
+
+  const [unlockingColor, setUnlockingColor] = useState<string | null>(null);
+
+  const handleUnlockColor = async (colorHex: string) => {
+    if (!user?.uid) return;
+    const userCoins = stats?.coins ?? 0;
+    if (userCoins < 200) {
+      Alert.alert('Insufficient Coins', 'Claim more zones or complete runs to earn Arena Coins!');
+      return;
+    }
+    setUnlockingColor(colorHex);
+    try {
+      const res = await fetch(`${API_URL}/api/shop/unlock-color`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: user.uid, color: colorHex })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        Alert.alert('Unlocked!', `Unlocked premium color ${colorHex}!`);
+        fetchProfile();
+      } else {
+        Alert.alert('Error', data.error || 'Failed to unlock color.');
+      }
+    } catch (err) {
+      console.error(err);
+      Alert.alert('Error', 'Network request failed.');
+    } finally {
+      setUnlockingColor(null);
+    }
+  };
+
+  const handleUnfollow = async (followingId: string) => {
+    if (!user?.uid) return;
+    try {
+      const res = await fetch(`${API_URL}/api/followers/unfollow`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: user.uid, followingId })
+      });
+      if (res.ok) {
+        fetchProfile();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   const pickImage = async () => {
     const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (permissionResult.granted === false) {
@@ -266,6 +365,24 @@ export default function ProfileScreen() {
     }
   };
 
+  const pickCoverImage = async () => {
+    const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (permissionResult.granted === false) {
+      Alert.alert('Permission Required', 'Camera roll access is needed to change your cover photo.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [16, 9],
+      quality: 0.4,
+      base64: true,
+    });
+    if (!result.canceled && result.assets && result.assets[0]?.base64) {
+      setEditCoverImageUrl(`data:image/jpeg;base64,${result.assets[0].base64}`);
+    }
+  };
+
   const handleSaveProfile = async () => {
     if (!user?.uid) return;
     try {
@@ -277,6 +394,7 @@ export default function ProfileScreen() {
           displayName: editDisplayName.trim(),
           bio: editBio.trim(),
           avatarUrl: editAvatarUrl,
+          coverImageUrl: editCoverImageUrl,
           characterType: editCharacter,
           color: editColor,
         }),
@@ -369,6 +487,18 @@ export default function ProfileScreen() {
       ) : (
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
           
+          {/* Background Cover Image Banner */}
+          <View style={styles.coverContainer}>
+            {stats?.cover_image_url ? (
+              <Image source={{ uri: stats.cover_image_url }} style={styles.coverImage} resizeMode="cover" />
+            ) : (
+              <View style={[styles.coverPlaceholder, { backgroundColor: color + '22' }]} />
+            )}
+            <TouchableOpacity style={styles.changeCoverFloatingBtn} onPress={pickCoverImage}>
+               <Text style={styles.changeCoverFloatingText}>📷 Change Cover</Text>
+            </TouchableOpacity>
+          </View>
+
           {/* Top Profile Header Section */}
           <View style={styles.profileHeaderContainer}>
             <View style={[styles.avatarBorder, { borderColor: color }]}>
@@ -404,14 +534,14 @@ export default function ProfileScreen() {
             </View>
           </View>
 
-          {/* Double Tab Row */}
+          {/* Triple Tab Row */}
           <View style={styles.tabContainer}>
             <TouchableOpacity
               style={[styles.tabButton, activeTab === 'stats' && styles.tabButtonActive]}
               onPress={() => setActiveTab('stats')}
             >
               <Text style={[styles.tabButtonText, activeTab === 'stats' && styles.tabButtonTextActive]}>
-                📈 STATS & HISTORY
+                📈 STATS
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
@@ -419,12 +549,20 @@ export default function ProfileScreen() {
               onPress={() => setActiveTab('posts')}
             >
               <Text style={[styles.tabButtonText, activeTab === 'posts' && styles.tabButtonTextActive]}>
-                🖼️ MY POSTS ({myPosts.length})
+                🖼️ POSTS ({myPosts.length})
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.tabButton, activeTab === 'followers' && styles.tabButtonActive]}
+              onPress={() => setActiveTab('followers')}
+            >
+              <Text style={[styles.tabButtonText, activeTab === 'followers' && styles.tabButtonTextActive]}>
+                👥 FOLLOWERS ({followers.length})
               </Text>
             </TouchableOpacity>
           </View>
 
-          {activeTab === 'stats' ? (
+          {activeTab === 'stats' && (
             /* ===== STATS TAB CONTENT ===== */
             <View style={styles.tabContent}>
               {/* StatCards Row */}
@@ -432,6 +570,90 @@ export default function ProfileScreen() {
                 <StatCard label="RUNS" value={String(stats?.total_runs || 0)} unit="sessions" />
                 <StatCard label="DISTANCE" value={totalDistanceKm} unit="km" />
                 <StatCard label="TERRITORY" value={totalTerritoryKm2} unit="km²" />
+              </View>
+
+              {/* Weekly Distance Bar Chart (Custom Flex-CSS cylinders) */}
+              <View style={styles.panelCard}>
+                <Text style={styles.panelTitle}>WEEKLY PROGRESS (KM)</Text>
+                <View style={styles.chartBarRow}>
+                  {weeklyData.map((d, index) => {
+                    const maxDistance = Math.max(...weeklyData.map(day => day.val), 1);
+                    const heightPercent = `${Math.max((d.val / maxDistance) * 100, 5)}%`;
+                    return (
+                      <View key={index} style={styles.chartCol}>
+                        <Text style={styles.chartValText}>{d.val > 0 ? d.val.toFixed(1) : '0'}</Text>
+                        <View style={styles.chartBarBg}>
+                          <View style={[styles.chartBarFill, { height: heightPercent as any, backgroundColor: color }]} />
+                        </View>
+                        <Text style={styles.chartLabelText}>{d.label}</Text>
+                      </View>
+                    );
+                  })}
+                </View>
+              </View>
+
+              {/* Calories progress card (SVG Graphic Meter) */}
+              <View style={styles.panelCard}>
+                <Text style={styles.panelTitle}>CALORIES BURNED</Text>
+                <View style={styles.calorieCardContent}>
+                  <View style={{ width: 120, height: 120, alignItems: 'center', justifyContent: 'center' }}>
+                    <Svg width="120" height="120" viewBox="0 0 100 100">
+                      <Circle cx="50" cy="50" r="45" stroke={color + '33'} strokeWidth="10" fill="transparent" />
+                      <Circle 
+                        cx="50" 
+                        cy="50" 
+                        r="45" 
+                        stroke={color} 
+                        strokeWidth="10" 
+                        fill="transparent" 
+                        strokeDasharray={`${2 * Math.PI * 45}`} 
+                        strokeDashoffset={`${2 * Math.PI * 45 * (1 - Math.min(totalCalories / 500, 1))}`} 
+                        strokeLinecap="round" 
+                        transform="rotate(-90 50 50)" 
+                      />
+                    </Svg>
+                    <View style={{ position: 'absolute', alignItems: 'center' }}>
+                      <Text style={[styles.calorieBigValue, { color }]}>{totalCalories}</Text>
+                      <Text style={styles.calorieSubText}>kcal</Text>
+                    </View>
+                  </View>
+                  
+                  <View style={styles.calorieProgressInfo}>
+                    <Text style={styles.calorieGoalText}>Daily Goal: 500 kcal</Text>
+                    <View style={styles.calorieBarBg}>
+                      <View style={[styles.calorieBarFill, { width: `${Math.min((totalCalories / 500) * 100, 100)}%`, backgroundColor: color }]} />
+                    </View>
+                    <Text style={styles.calorieEquivalentText}>
+                      🍕 Equivalent to <Text style={{fontWeight: '900', color}}>{Math.max(totalCalories / 285, 0).toFixed(1)}</Text> slices of Pizza!
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              {/* Activity Distribution Chart */}
+              <View style={styles.panelCard}>
+                <Text style={styles.panelTitle}>ACTIVITY DISTRIBUTION</Text>
+                <View style={styles.activityDistributionContainer}>
+                  <View style={styles.stackedBar}>
+                    <View style={[styles.stackedSegment, { flex: 0.6, backgroundColor: '#00BFFF' }]} />
+                    <View style={[styles.stackedSegment, { flex: 0.3, backgroundColor: '#FF4D4D' }]} />
+                    <View style={[styles.stackedSegment, { flex: 0.1, backgroundColor: '#32CD32' }]} />
+                  </View>
+                  <View style={styles.activityLegendRow}>
+                    <View style={styles.legendItem}>
+                      <View style={[styles.legendDot, { backgroundColor: '#00BFFF' }]} />
+                      <Text style={styles.legendText}>Running (60%)</Text>
+                    </View>
+                    <View style={styles.legendItem}>
+                      <View style={[styles.legendDot, { backgroundColor: '#FF4D4D' }]} />
+                      <Text style={styles.legendText}>Walking (30%)</Text>
+                    </View>
+                    <View style={styles.legendItem}>
+                      <View style={[styles.legendDot, { backgroundColor: '#32CD32' }]} />
+                      <Text style={styles.legendText}>Cycling (10%)</Text>
+                    </View>
+                  </View>
+                </View>
               </View>
 
               {/* Character Class Card */}
@@ -469,6 +691,39 @@ export default function ProfileScreen() {
                 )}
               </View>
 
+              {/* Arena Customization Shop */}
+              <View style={styles.panelCard}>
+                <View style={styles.shopHeaderRow}>
+                  <Text style={styles.panelTitle}>ARENA CUSTOMIZATION SHOP</Text>
+                  <Text style={styles.coinsBalance}>🪙 {stats?.coins ?? 100} Coins</Text>
+                </View>
+                <Text style={styles.shopSubText}>Spend 200 Arena Coins to unlock premium neon territory colors</Text>
+                <View style={styles.shopGrid}>
+                  {shopColors.map(c => {
+                    const isUnlocked = stats?.unlocked_colors?.includes(c.hex) || c.hex === '#FF4D4D' || c.hex === '#1E90FF';
+                    return (
+                      <View key={c.hex} style={styles.shopItem}>
+                        <View style={[styles.shopColorIndicator, { backgroundColor: c.hex }]} />
+                        <Text style={styles.shopColorName}>{c.name}</Text>
+                        {isUnlocked ? (
+                          <View style={styles.unlockedBadge}>
+                            <Text style={styles.unlockedText}>✓ Unlocked</Text>
+                          </View>
+                        ) : (
+                          <TouchableOpacity
+                            style={styles.unlockBtn}
+                            onPress={() => handleUnlockColor(c.hex)}
+                            disabled={unlockingColor !== null}
+                          >
+                            <Text style={styles.unlockBtnText}>🪙 200</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    );
+                  })}
+                </View>
+              </View>
+
               {/* Run History list */}
               <View style={styles.panelCard}>
                 <Text style={styles.panelTitle}>RUN LOGS</Text>
@@ -500,7 +755,9 @@ export default function ProfileScreen() {
                 <Text style={styles.logoutButtonText}>↩ LOG OUT</Text>
               </TouchableOpacity>
             </View>
-          ) : (
+          )}
+
+          {activeTab === 'posts' && (
             /* ===== POSTS TAB CONTENT ===== */
             <View style={styles.tabContent}>
               {myPosts.length === 0 ? (
@@ -529,6 +786,59 @@ export default function ProfileScreen() {
                   </View>
                 ))
               )}
+            </View>
+          )}
+
+          {activeTab === 'followers' && (
+            /* ===== FOLLOWERS TAB CONTENT ===== */
+            <View style={styles.tabContent}>
+              <View style={styles.panelCard}>
+                <Text style={styles.panelTitle}>FOLLOWERS ({followers.length})</Text>
+                {followers.length === 0 ? (
+                  <Text style={styles.noTrophiesText}>You have no followers yet.</Text>
+                ) : (
+                  followers.map(f => (
+                    <View key={f.id} style={styles.friendRow}>
+                      <View style={[styles.friendAvatar, { borderColor: f.color || '#00BFFF' }]}>
+                        <Text style={styles.friendAvatarEmoji}>
+                          {CHARACTER_EMOJI[f.character_type as CharacterType] || '🏃'}
+                        </Text>
+                      </View>
+                      <View style={styles.friendInfo}>
+                        <Text style={styles.friendName}>{f.display_name}</Text>
+                        <Text style={styles.friendClass}>{f.character_type?.toUpperCase()}</Text>
+                      </View>
+                    </View>
+                  ))
+                )}
+              </View>
+
+              <View style={styles.panelCard}>
+                <Text style={styles.panelTitle}>FOLLOWING ({following.length})</Text>
+                {following.length === 0 ? (
+                  <Text style={styles.noTrophiesText}>You are not following anyone.</Text>
+                ) : (
+                  following.map(f => (
+                    <View key={f.id} style={styles.friendRow}>
+                      <View style={[styles.friendAvatar, { borderColor: f.color || '#00BFFF' }]}>
+                        <Text style={styles.friendAvatarEmoji}>
+                          {CHARACTER_EMOJI[f.character_type as CharacterType] || '🏃'}
+                        </Text>
+                      </View>
+                      <View style={styles.friendInfo}>
+                        <Text style={styles.friendName}>{f.display_name}</Text>
+                        <Text style={styles.friendClass}>{f.character_type?.toUpperCase()}</Text>
+                      </View>
+                      <TouchableOpacity
+                        style={styles.removeFriendBtn}
+                        onPress={() => handleUnfollow(f.id)}
+                      >
+                        <Text style={styles.removeFriendBtnText}>Unfollow</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))
+                )}
+              </View>
             </View>
           )}
 
@@ -561,6 +871,20 @@ export default function ProfileScreen() {
                   </View>
                 )}
               </TouchableOpacity>
+
+              <Text style={styles.inputLabel}>COVER BACKGROUND</Text>
+              {editCoverImageUrl ? (
+                <View style={styles.coverSelector}>
+                  <Image source={{ uri: editCoverImageUrl }} style={styles.coverSelectorPreview} />
+                  <TouchableOpacity style={styles.changeCoverBtn} onPress={pickCoverImage}>
+                    <Text style={styles.changeCoverText}>Change Cover Photo</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <TouchableOpacity style={styles.coverSelectorPlaceholder} onPress={pickCoverImage}>
+                  <Text style={styles.coverSelectorPlaceholderText}>🖼️ Choose Cover Background</Text>
+                </TouchableOpacity>
+              )}
 
               <Text style={styles.inputLabel}>DISPLAY NAME</Text>
               <TextInput
@@ -598,7 +922,7 @@ export default function ProfileScreen() {
 
               <Text style={styles.inputLabel}>TERRITORY COLOR</Text>
               <View style={styles.colorRow}>
-                {['#FF4D4D', '#FF8C00', '#FFD700', '#00FA9A', '#00CED1', '#1E90FF', '#7B68EE', '#DA70D6'].map((col) => (
+                {Array.from(new Set(['#FF4D4D', '#1E90FF', ...(stats?.unlocked_colors || [])])).map((col) => (
                   <TouchableOpacity
                     key={col}
                     style={[
@@ -918,6 +1242,13 @@ const styles = StyleSheet.create({
   characterDescText: { fontSize: 12, color: '#8A8AAB', lineHeight: 18, marginTop: 4 },
 
   // Trophies Grid
+  activityDistributionContainer: { marginTop: 10 },
+  stackedBar: { flexDirection: 'row', height: 24, borderRadius: 12, overflow: 'hidden', marginBottom: 15 },
+  stackedSegment: { height: '100%' },
+  activityLegendRow: { flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center' },
+  legendItem: { flexDirection: 'row', alignItems: 'center' },
+  legendDot: { width: 10, height: 10, borderRadius: 5, marginRight: 6 },
+  legendText: { color: '#CCC', fontSize: 12, fontWeight: 'bold' },
   noTrophiesText: { color: '#4A4A6A', fontSize: 12, textAlign: 'center', paddingVertical: 12 },
   trophiesGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   trophyItem: {
@@ -1120,4 +1451,61 @@ const styles = StyleSheet.create({
   modalShareRow: { flexDirection: 'row', gap: 12, marginBottom: 20 },
   modalShareBtn: { flex: 1, paddingVertical: 14, borderRadius: 8, alignItems: 'center', elevation: 4 },
   modalShareBtnText: { color: '#FFFFFF', fontSize: 12, fontWeight: '900', letterSpacing: 1 },
+
+  // Cover Background Header Styles
+  coverContainer: { width: '100%', height: 140, position: 'relative' },
+  coverImage: { width: '100%', height: '100%' },
+  coverPlaceholder: { width: '100%', height: '100%' },
+  changeCoverFloatingBtn: { position: 'absolute', top: 10, right: 10, backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20 },
+  changeCoverFloatingText: { color: '#FFF', fontSize: 12, fontWeight: 'bold' },
+
+  // Weekly Distance Bar Graph Styles
+  chartBarRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', height: 150, paddingHorizontal: 10, marginTop: 12 },
+  chartCol: { alignItems: 'center', flex: 1 },
+  chartValText: { fontSize: 8, fontWeight: 'bold', color: '#8A8AAB', marginBottom: 4 },
+  chartBarBg: { width: 14, height: 100, backgroundColor: '#16162A', borderRadius: 8, overflow: 'hidden', justifyContent: 'flex-end' },
+  chartBarFill: { width: '100%', borderRadius: 8 },
+  chartLabelText: { fontSize: 9, fontWeight: 'bold', color: '#4A4A6A', marginTop: 6 },
+
+  // Calories Progress Card Styles
+  calorieCardContent: { flexDirection: 'row', gap: 16, alignItems: 'center', marginTop: 12 },
+  calorieCircleContainer: { width: 70, height: 70, borderRadius: 35, borderWidth: 2, alignItems: 'center', justifyContent: 'center', backgroundColor: '#16162A' },
+  calorieBigValue: { fontSize: 18, fontWeight: '900', color: '#FFFFFF' },
+  calorieSubText: { fontSize: 8, fontWeight: '800', color: '#4A4A6A', marginTop: 1 },
+  calorieProgressInfo: { flex: 1 },
+  calorieGoalText: { fontSize: 11, fontWeight: 'bold', color: '#FFFFFF', marginBottom: 4 },
+  calorieBarBg: { width: '100%', height: 6, backgroundColor: '#16162A', borderRadius: 3, overflow: 'hidden', marginBottom: 6 },
+  calorieBarFill: { height: '100%', borderRadius: 3 },
+  calorieEquivalentText: { fontSize: 11, color: '#8A8AAB', fontStyle: 'italic' },
+
+  // Customization Arena Shop Styles
+  shopHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  coinsBalance: { fontSize: 13, fontWeight: '900', color: '#FFD700' },
+  shopSubText: { fontSize: 11, color: '#4A4A6A', marginTop: 2, marginBottom: 12 },
+  shopGrid: { flexDirection: 'column', gap: 10 },
+  shopItem: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#16162A', borderWidth: 1, borderColor: '#2A2A4A', borderRadius: 8, padding: 10 },
+  shopColorIndicator: { width: 16, height: 16, borderRadius: 8, marginRight: 10 },
+  shopColorName: { flex: 1, fontSize: 12, fontWeight: '800', color: '#FFFFFF' },
+  unlockedBadge: { backgroundColor: '#00FA9A22', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6 },
+  unlockedText: { color: '#00FA9A', fontSize: 10, fontWeight: '900' },
+  unlockBtn: { backgroundColor: '#FFD700', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 6 },
+  unlockBtnText: { color: '#0D0D1A', fontSize: 11, fontWeight: '900' },
+
+  // Friends Tab Styles
+  friendRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#16162A', borderWidth: 1, borderColor: '#2A2A4A', borderRadius: 8, padding: 10, marginBottom: 10 },
+  friendAvatar: { width: 36, height: 36, borderRadius: 18, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0D0D1A', marginRight: 12 },
+  friendAvatarEmoji: { fontSize: 18 },
+  friendInfo: { flex: 1 },
+  friendName: { fontSize: 13, fontWeight: '900', color: '#FFFFFF' },
+  friendClass: { fontSize: 9, color: '#4A4A6A', fontWeight: '800', marginTop: 2 },
+  removeFriendBtn: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 6, backgroundColor: '#FF3B3022', borderWidth: 1, borderColor: '#FF3B3044' },
+  removeFriendBtnText: { color: '#FF3B30', fontSize: 11, fontWeight: '900' },
+
+  // Cover Image Selectors Inside Edit Modal
+  coverSelector: { width: '100%', height: 100, borderRadius: 8, overflow: 'hidden', position: 'relative', marginBottom: 16 },
+  coverSelectorPreview: { width: '100%', height: '100%' },
+  changeCoverBtn: { position: 'absolute', bottom: 8, right: 8, backgroundColor: '#0D0D1AEE', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 6, borderWidth: 1, borderColor: '#2A2A4A' },
+  changeCoverText: { color: '#00BFFF', fontSize: 10, fontWeight: '900' },
+  coverSelectorPlaceholder: { width: '100%', height: 80, borderRadius: 8, borderStyle: 'dashed', borderWidth: 1.5, borderColor: '#2A2A4A', backgroundColor: '#16162A', alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
+  coverSelectorPlaceholderText: { color: '#8A8AAB', fontSize: 12, fontWeight: '800' },
 });

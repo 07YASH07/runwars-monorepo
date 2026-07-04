@@ -11,6 +11,12 @@ import {
   Animated,
   StatusBar,
   ScrollView,
+  Modal,
+  TextInput,
+  KeyboardAvoidingView,
+  ActivityIndicator,
+  Alert,
+  Platform,
 } from 'react-native';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { useAuth } from '@/context/AuthContext';
@@ -89,6 +95,8 @@ function formatTime(seconds: number): string {
   return `${s}s`;
 }
 
+const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.2.2:3000';
+
 export default function PostRunScreen() {
   const route = useRoute<PostRunRouteProp>();
   const navigation = useNavigation();
@@ -105,11 +113,18 @@ export default function PostRunScreen() {
   
   const viewShotRef = useRef<any>(null);
 
+  const [composerVisible, setComposerVisible] = React.useState(false);
+  const [postContent, setPostContent] = React.useState(`Just completed a ${distanceKm}km run and claimed ${areaSquareMeters.toFixed(0)}m² of territory in RunWars! 🏃‍♂️💨`);
+  const [submittingPost, setSubmittingPost] = React.useState(false);
+
   useEffect(() => {
     Animated.parallel([
       Animated.timing(fadeAnim, { toValue: 1, duration: 500, useNativeDriver: true }),
       Animated.spring(slideAnim, { toValue: 0, tension: 80, friction: 10, useNativeDriver: true }),
-    ]).start();
+    ]).start(() => {
+      // Auto-prompt composer after a short delay
+      setTimeout(() => setComposerVisible(true), 800);
+    });
   }, []);
 
   const shareImage = async () => {
@@ -126,6 +141,37 @@ export default function PostRunScreen() {
       }
     } catch (err) {
       console.error('Failed to share screenshot:', err);
+    }
+  };
+
+  const handlePost = async () => {
+    if (!user) return;
+    setSubmittingPost(true);
+    try {
+      let b64 = '';
+      if (viewShotRef.current && viewShotRef.current.capture) {
+        b64 = await viewShotRef.current.capture({ format: 'jpg', quality: 0.5, result: 'base64' });
+      }
+      const res = await fetch(`${API_URL}/api/posts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: user.uid,
+          content: postContent,
+          imageUrl: b64 ? `data:image/jpeg;base64,${b64}` : undefined,
+        })
+      });
+      if (res.ok) {
+        setComposerVisible(false);
+        Alert.alert('Posted!', 'Your run has been shared to the Social Feed.');
+      } else {
+        throw new Error('Failed to post');
+      }
+    } catch (err) {
+      console.error(err);
+      Alert.alert('Error', 'Failed to publish post.');
+    } finally {
+      setSubmittingPost(false);
     }
   };
 
@@ -266,6 +312,46 @@ export default function PostRunScreen() {
 
         </Animated.View>
       </ScrollView>
+
+      {/* Auto-Post Composer Modal */}
+      <Modal visible={composerVisible} animationType="slide" transparent>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
+          <View style={styles.composerCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Share Your Run</Text>
+              <TouchableOpacity onPress={() => setComposerVisible(false)}>
+                <Text style={styles.closeText}>Skip</Text>
+              </TouchableOpacity>
+            </View>
+
+            <TextInput
+              style={styles.composerInput}
+              placeholder="What's on your mind?"
+              placeholderTextColor="#4A4A6A"
+              multiline
+              maxLength={280}
+              value={postContent}
+              onChangeText={setPostContent}
+            />
+
+            <TouchableOpacity
+              style={[styles.publishBtn, !postContent.trim() && styles.publishBtnDisabled]}
+              disabled={!postContent.trim() || submittingPost}
+              onPress={handlePost}
+            >
+              {submittingPost ? (
+                <ActivityIndicator color="#0D0D1A" />
+              ) : (
+                <Text style={styles.publishText}>Publish Post</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
     </View>
   );
 }
@@ -425,4 +511,13 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 1.5,
   },
+  modalOverlay: { flex: 1, backgroundColor: '#000000AA', justifyContent: 'center', alignItems: 'center' },
+  composerCard: { width: '90%', backgroundColor: '#16162A', borderRadius: 16, borderWidth: 1.5, borderColor: '#00BFFF44', padding: 20, gap: 16 },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  modalTitle: { fontSize: 18, fontWeight: '900', color: '#FFFFFF' },
+  closeText: { color: '#8A8AAB', fontWeight: '700' },
+  composerInput: { backgroundColor: '#0D0D1A', borderRadius: 8, color: '#FFFFFF', padding: 12, fontSize: 14, height: 100, textAlignVertical: 'top', borderWidth: 1, borderColor: '#2A2A4A' },
+  publishBtn: { backgroundColor: '#00BFFF', paddingVertical: 12, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  publishBtnDisabled: { backgroundColor: '#4A4A6A', opacity: 0.5 },
+  publishText: { color: '#0D0D1A', fontWeight: '900', fontSize: 14 },
 });
