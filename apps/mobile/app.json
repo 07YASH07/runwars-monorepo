@@ -43,6 +43,7 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "package": "com.runwars.v2",
+      "googleServicesFile": "./google-services.json",
       "config": {
         "googleMaps": {
           "apiKey": "AIzaSyBKnrhiRW5WggGI32BrOntEaxXp4nB39S4"
