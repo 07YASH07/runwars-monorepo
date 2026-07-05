@@ -6,9 +6,13 @@ const baseUrl = import.meta.env.VITE_BACKEND_URL || window.location.origin;
 
 export default function UserInspector() {
   const { token } = useAdminAuth();
-  const [users, setUsers] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
+  const [editingUser, setEditingUser] = useState<any | null>(null);
+  const [editForm, setEditForm] = useState({
+    displayName: '',
+    characterType: 'scout',
+    color: '#00BFFF',
+    bio: ''
+  });
 
   const fetchUsers = async () => {
     setLoading(true);
@@ -45,6 +49,40 @@ export default function UserInspector() {
       }
     } catch (err) {
       alert('Error deleting user.');
+    }
+  };
+
+  const startEdit = (user: any) => {
+    setEditingUser(user);
+    setEditForm({
+      displayName: user.display_name || '',
+      characterType: user.character_type?.toLowerCase() || 'scout',
+      color: user.color || '#00BFFF',
+      bio: user.bio || ''
+    });
+  };
+
+  const handleUpdate = async () => {
+    try {
+      const res = await fetch(`${baseUrl}/api/admin/user/update`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-admin-token': token! },
+        body: JSON.stringify({
+          userId: editingUser.id,
+          displayName: editForm.displayName,
+          characterType: editForm.characterType,
+          color: editForm.color,
+          bio: editForm.bio
+        })
+      });
+      if (res.ok) {
+        setEditingUser(null);
+        fetchUsers();
+      } else {
+        alert('Failed to update user.');
+      }
+    } catch (err) {
+      alert('Error updating user.');
     }
   };
 
@@ -117,7 +155,7 @@ export default function UserInspector() {
                     <td style={{ padding: '16px 12px', color: 'var(--text-primary)' }}>{((u.total_distance || 0) / 1000).toFixed(1)}</td>
                     <td style={{ padding: '16px 12px' }}>
                       <div style={{ display: 'flex', gap: '8px' }}>
-                        <button className="btn btn-secondary" style={{ padding: '8px' }}><Edit size={16} /></button>
+                        <button className="btn btn-secondary" style={{ padding: '8px' }} onClick={() => startEdit(u)}><Edit size={16} /></button>
                         <button className="btn btn-danger" style={{ padding: '8px' }} onClick={() => handleDelete(u.id)}><Trash2 size={16} /></button>
                       </div>
                     </td>
@@ -128,6 +166,78 @@ export default function UserInspector() {
           </table>
         </div>
       </div>
+
+      {/* Edit User Modal */}
+      {editingUser && (
+        <div className="modal-overlay" style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(8px)',
+          display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000
+        }}>
+          <div className="glass-panel animate-fade-in" style={{ padding: '32px', maxWidth: '450px', width: '90%', border: '1px solid var(--border)' }}>
+            <h2 style={{ marginBottom: '24px', fontSize: '20px', color: 'var(--text-primary)', fontWeight: 800 }}>Edit User Details</h2>
+            
+            <div className="input-group">
+              <label className="input-label">Display Name</label>
+              <input 
+                type="text" 
+                className="input-field" 
+                value={editForm.displayName} 
+                onChange={e => setEditForm({ ...editForm, displayName: e.target.value })} 
+              />
+            </div>
+
+            <div className="input-group">
+              <label className="input-label">Character Class</label>
+              <select 
+                className="input-field" 
+                value={editForm.characterType} 
+                onChange={e => setEditForm({ ...editForm, characterType: e.target.value })}
+                style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
+              >
+                <option value="scout">Scout</option>
+                <option value="juggernaut">Juggernaut</option>
+                <option value="infiltrator">Infiltrator</option>
+                <option value="commander">Commander</option>
+              </select>
+            </div>
+
+            <div className="input-group">
+              <label className="input-label">Theme Color (HEX)</label>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <input 
+                  type="color" 
+                  value={editForm.color} 
+                  onChange={e => setEditForm({ ...editForm, color: e.target.value })}
+                  style={{ width: '40px', height: '40px', border: 'none', background: 'none', cursor: 'pointer' }}
+                />
+                <input 
+                  type="text" 
+                  className="input-field" 
+                  value={editForm.color} 
+                  onChange={e => setEditForm({ ...editForm, color: e.target.value })}
+                  style={{ flex: 1 }}
+                />
+              </div>
+            </div>
+
+            <div className="input-group" style={{ marginBottom: '24px' }}>
+              <label className="input-label">Bio</label>
+              <textarea 
+                className="input-field" 
+                rows={3} 
+                value={editForm.bio} 
+                onChange={e => setEditForm({ ...editForm, bio: e.target.value })} 
+              />
+            </div>
+
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+              <button className="btn btn-secondary" onClick={() => setEditingUser(null)}>Cancel</button>
+              <button className="btn btn-primary" onClick={handleUpdate}>Save Changes</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
