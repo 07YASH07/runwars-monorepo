@@ -12,6 +12,11 @@ export default function Dashboard() {
   const [livePlayers, setLivePlayers] = useState<any[]>([]);
   const [territories, setTerritories] = useState<any[]>([]);
   const [logs, setLogs] = useState<string[]>([]);
+  const logEndRef = React.useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [logs]);
 
   useEffect(() => {
     // Fetch initial health/metrics
@@ -30,7 +35,7 @@ export default function Dashboard() {
     const newSocket = io(baseUrl, { auth: { token } });
     
     newSocket.on('connect', () => {
-      setLogs(l => [...l, `[System] Socket connected: ${newSocket.id}`].slice(-50));
+      setLogs(l => [...l, `[System] Socket connected: ${newSocket.id}`].slice(-100));
     });
 
     newSocket.on('livePlayersUpdate', (players) => {
@@ -43,8 +48,24 @@ export default function Dashboard() {
       setMetrics(m => ({ ...m, territories: terrs.length }));
     });
 
+    newSocket.on('playerJoined', (p) => {
+      setLogs(l => [...l, `[User] Runner ${p.displayName || p.userId.substring(0, 8)} joined the Arena`].slice(-100));
+    });
+
+    newSocket.on('playerLeft', (p) => {
+      setLogs(l => [...l, `[User] Runner ${p.userId.substring(0, 8)} left the Arena`].slice(-100));
+    });
+
+    newSocket.on('locationUpdated', (payload) => {
+      setLogs(l => [...l, `[Location] Runner ${payload.userId.substring(0, 8)} moved to (${payload.point.latitude.toFixed(4)}, ${payload.point.longitude.toFixed(4)})`].slice(-100));
+    });
+
     newSocket.on('territoryClaimed', (t) => {
-      setLogs(l => [...l, `[Map] Territory ${t.id} claimed by ${t.userId}`].slice(-50));
+      setLogs(l => [...l, `[Map] Zone ${t.id.substring(0, 8)} claimed by ${t.ownerName || t.userId.substring(0, 8)}`].slice(-100));
+    });
+
+    newSocket.on('conflict:resolved', (c) => {
+      setLogs(l => [...l, `[Conflict] Zone ${c.stolenTerritoryId.substring(0, 8)} resolved: Winner ${c.winnerId.substring(0, 8)} beat ${c.loserId.substring(0, 8)}`].slice(-100));
     });
 
     return () => {
@@ -117,6 +138,7 @@ export default function Dashboard() {
           <h3 style={{ marginBottom: '16px', color: 'var(--text-secondary)', fontSize: '14px', textTransform: 'uppercase' }}>System Stream</h3>
           <div style={{ flex: 1, background: 'var(--bg-secondary)', borderRadius: '8px', padding: '12px', overflowY: 'auto', border: '1px solid var(--border)', fontFamily: 'monospace', fontSize: '12px', color: '#a0a0a0', display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {logs.length === 0 ? <div>No activity yet...</div> : logs.map((log, i) => <div key={i}>{log}</div>)}
+            <div ref={logEndRef} />
           </div>
         </div>
       </div>
