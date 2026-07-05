@@ -53,7 +53,9 @@
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
         "ACCESS_BACKGROUND_LOCATION",
-        "FOREGROUND_SERVICE"
+        "FOREGROUND_SERVICE",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
       ]
     },
     "web": {
@@ -61,8 +63,9 @@
     },
     "extra": {
       "eas": {
-        "projectId": "b212f0ad-ab87-4340-a159-867df3c15814"
+        "projectId": "d957dd92-6e79-494f-9173-b05d21ebe446"
       }
-    }
+    },
+    "owner": "yash0909090"
   }
 }
