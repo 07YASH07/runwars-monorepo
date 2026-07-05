@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
+import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 import type { CharacterType } from '@runwars/shared';
@@ -100,7 +101,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (finalStatus !== 'granted') {
             return;
           }
-          const tokenData = await Notifications.getExpoPushTokenAsync({ projectId: 'your-eas-project-id' });
+          const projectId = Constants?.expoConfig?.extra?.eas?.projectId ?? Constants?.easConfig?.projectId;
+          const tokenData = await Notifications.getExpoPushTokenAsync({
+            projectId: projectId && projectId !== 'your-eas-project-id' ? projectId : 'b212f0ad-ab87-4340-a159-867df3c15814'
+          });
           const token = tokenData.data;
           
           await fetch(`${API_URL}/api/users/push-token`, {

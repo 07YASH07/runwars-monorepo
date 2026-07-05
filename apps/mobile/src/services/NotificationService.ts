@@ -44,10 +44,11 @@ export async function registerForPushNotificationsAsync(): Promise<string | unde
       console.log('Project ID not found in app.json. Add eas.projectId.');
     }
     
+    const finalProjectId = projectId && projectId !== 'your-eas-project-id' ? projectId : 'b212f0ad-ab87-4340-a159-867df3c15814';
     try {
       token = (
         await Notifications.getExpoPushTokenAsync({
-          projectId: projectId || 'b212f0ad-ab87-4340-a159-867df3c15814', // fallback if needed
+          projectId: finalProjectId,
         })
       ).data;
       console.log('Expo Push Token:', token);
