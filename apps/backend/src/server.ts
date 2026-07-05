@@ -48,8 +48,17 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL || 'postgresql://postgres@localhost:5432/runwars',
 });
 
-pool.connect().then(() => {
+pool.connect().then(async () => {
   console.log('✅ [Database] Connected to PostgreSQL successfully!');
+  try {
+    const res = await pool.query('SELECT id, expo_push_token FROM users WHERE expo_push_token IS NOT NULL');
+    for (const row of res.rows) {
+      pushTokens.set(row.id, row.expo_push_token);
+    }
+    console.log(`📡 [Push] Loaded ${pushTokens.size} push tokens from database.`);
+  } catch (err: any) {
+    console.error('❌ [Push] Failed to load push tokens on startup:', err.message);
+  }
 }).catch((err) => {
   console.error('❌ [Database] Failed to connect to PostgreSQL:', err.message);
   console.log('⚠️  [Server] Running in memory-only mode (territories will not persist).');
@@ -1614,6 +1623,7 @@ app.post('/api/users/push-token', async (req, res) => {
   if (!userId || !token) return res.status(400).json({ error: 'Missing userId or token' });
   try {
     await pool.query('UPDATE users SET expo_push_token = $1 WHERE id = $2', [token, userId]);
+    pushTokens.set(userId, token);
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
