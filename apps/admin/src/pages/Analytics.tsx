@@ -40,7 +40,6 @@ export default function Analytics() {
         });
         if (res.ok) {
           const data = await res.json();
-          // Mock data if backend returns empty or isn't fully implemented
           setAnalytics(data);
         }
       } catch (err) {
@@ -50,6 +49,22 @@ export default function Analytics() {
     fetchAnalytics();
   }, [token]);
 
+  const formatDate = (dateStr: string) => {
+    try {
+      const d = new Date(dateStr);
+      return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    } catch {
+      return dateStr;
+    }
+  };
+
+  const classColors: Record<string, string> = {
+    scout: '#00BFFF',
+    juggernaut: '#FF3B30',
+    infiltrator: '#32CD32',
+    commander: '#FFD700'
+  };
+
   const mockLineData = {
     labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
     datasets: [
@@ -57,7 +72,8 @@ export default function Analytics() {
         label: 'Daily Active Runners',
         data: [12, 19, 15, 25, 22, 30, 28],
         borderColor: '#00BFFF',
-        backgroundColor: 'rgba(0, 191, 255, 0.5)',
+        backgroundColor: 'rgba(0, 191, 255, 0.1)',
+        fill: true,
       },
     ],
   };
@@ -83,6 +99,42 @@ export default function Analytics() {
       },
     ],
   };
+
+  const lineData = analytics?.dau?.length ? {
+    labels: analytics.dau.map((d: any) => formatDate(d.day)),
+    datasets: [
+      {
+        label: 'Daily Active Runners',
+        data: analytics.dau.map((d: any) => d.count),
+        borderColor: '#00BFFF',
+        backgroundColor: 'rgba(0, 191, 255, 0.1)',
+        fill: true,
+        tension: 0.3,
+      },
+    ],
+  } : mockLineData;
+
+  const barData = analytics?.runsPerDay?.length ? {
+    labels: analytics.runsPerDay.map((d: any) => formatDate(d.day)),
+    datasets: [
+      {
+        label: 'Runs Per Day',
+        data: analytics.runsPerDay.map((d: any) => d.count),
+        backgroundColor: '#32CD32',
+      },
+    ],
+  } : mockBarData;
+
+  const doughnutData = analytics?.classDistribution?.length ? {
+    labels: analytics.classDistribution.map((c: any) => c.character_type ? c.character_type.charAt(0).toUpperCase() + c.character_type.slice(1) : 'Unknown'),
+    datasets: [
+      {
+        data: analytics.classDistribution.map((c: any) => c.count),
+        backgroundColor: analytics.classDistribution.map((c: any) => classColors[c.character_type?.toLowerCase()] || '#8A8AAB'),
+        borderWidth: 0,
+      },
+    ],
+  } : mockDoughnutData;
 
   const chartOptions = {
     responsive: true,
@@ -110,12 +162,12 @@ export default function Analytics() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '24px', marginBottom: '24px' }}>
         <div className="glass-panel" style={{ padding: '24px', height: '300px' }}>
           <h3 style={{ marginBottom: '16px', color: 'var(--text-secondary)', fontSize: '14px', textTransform: 'uppercase' }}>Daily Active Runners</h3>
-          <Line data={mockLineData} options={chartOptions} />
+          <Line data={lineData} options={chartOptions} />
         </div>
         
         <div className="glass-panel" style={{ padding: '24px', height: '300px' }}>
           <h3 style={{ marginBottom: '16px', color: 'var(--text-secondary)', fontSize: '14px', textTransform: 'uppercase' }}>Runs Per Day</h3>
-          <Bar data={mockBarData} options={chartOptions} />
+          <Bar data={barData} options={chartOptions} />
         </div>
       </div>
 
@@ -123,19 +175,28 @@ export default function Analytics() {
         <div className="glass-panel" style={{ padding: '24px', height: '350px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
           <h3 style={{ marginBottom: '16px', color: 'var(--text-secondary)', fontSize: '14px', textTransform: 'uppercase', width: '100%' }}>Class Distribution</h3>
           <div style={{ width: '100%', flex: 1, position: 'relative' }}>
-            <Doughnut data={mockDoughnutData} options={{ ...chartOptions, scales: undefined, maintainAspectRatio: false }} />
+            <Doughnut data={doughnutData} options={{ ...chartOptions, scales: undefined, maintainAspectRatio: false }} />
           </div>
         </div>
 
         <div className="glass-panel" style={{ padding: '24px', height: '350px' }}>
           <h3 style={{ marginBottom: '16px', color: 'var(--text-secondary)', fontSize: '14px', textTransform: 'uppercase' }}>Top Runners (Distance)</h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            {['SonicRunner', 'Flash', 'QuickSilver', 'RoadRunner', 'Dash'].map((name, i) => (
-              <div key={name} style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: 'var(--bg-secondary)', borderRadius: '8px', border: '1px solid var(--border)' }}>
-                <span style={{ fontWeight: 600 }}>{i + 1}. {name}</span>
-                <span style={{ color: 'var(--accent-blue)' }}>{((5 - i) * 15.4).toFixed(1)} km</span>
-              </div>
-            ))}
+            {analytics?.topByDistance?.length ? (
+              analytics.topByDistance.map((runner: any, i: number) => (
+                <div key={runner.display_name} style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: 'var(--bg-secondary)', borderRadius: '8px', border: '1px solid var(--border)' }}>
+                  <span style={{ fontWeight: 600 }}>{i + 1}. {runner.display_name || 'Anonymous'}</span>
+                  <span style={{ color: 'var(--accent-blue)' }}>{(runner.total_distance / 1000).toFixed(2)} km</span>
+                </div>
+              ))
+            ) : (
+              ['SonicRunner', 'Flash', 'QuickSilver', 'RoadRunner', 'Dash'].map((name, i) => (
+                <div key={name} style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: 'var(--bg-secondary)', borderRadius: '8px', border: '1px solid var(--border)' }}>
+                  <span style={{ fontWeight: 600 }}>{i + 1}. {name}</span>
+                  <span style={{ color: 'var(--accent-blue)' }}>{((5 - i) * 15.4).toFixed(1)} km</span>
+                </div>
+              ))
+            )}
           </div>
         </div>
       </div>
