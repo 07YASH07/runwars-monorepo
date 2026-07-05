@@ -13,6 +13,9 @@ export default function UserInspector() {
     color: '#00BFFF',
     bio: ''
   });
+  const [users, setUsers] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
 
   const fetchUsers = async () => {
     setLoading(true);
