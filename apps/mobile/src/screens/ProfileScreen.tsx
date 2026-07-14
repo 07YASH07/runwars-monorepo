@@ -893,7 +893,7 @@ Check the Avatar Shop to equip it!`
                           ) : (
                             <View style={styles.progressBarContainer}>
                               <View style={[styles.progressBarTrack]}>
-                                <View style={[styles.progressBarFill, { width: `${pct}%` as any, backgroundColor: color }]} />
+                                <View style={[styles.milestoneBarFill, { width: `${pct}%` as any, backgroundColor: color }]} />
                               </View>
                               <Text style={styles.progressBarLabel}>{totalKm.toFixed(1)} / {m.requiredKm} km</Text>
                             </View>
@@ -1714,7 +1714,7 @@ const styles = StyleSheet.create({
   avatarSlotEmoji: { fontSize: 22 },
   activeIndicatorDot: { position: 'absolute', bottom: 1, right: 1, width: 8, height: 8, borderRadius: 4, borderWidth: 1, borderColor: '#0D0D1A' },
   progressBarContainer: { width: '100%', gap: 3 },
-  progressBarFill: { height: 4, borderRadius: 2 },
+  milestoneBarFill: { height: 4, borderRadius: 2 },
   progressBarLabel: { fontSize: 9, color: '#8A8AAB', fontWeight: '700' },
   progressBarTrack: { width: '100%', height: 4, backgroundColor: '#2A2A4A', borderRadius: 2, overflow: 'hidden' },
   avatarShopLeft: { width: 52, alignItems: 'center', marginRight: 12 },
