@@ -324,7 +324,7 @@ io.on('connection', async (socket: Socket) => {
     }
   });
 
-  socket.on('locationUpdate', (payload: LocationUpdatePayload) => {
+  socket.on('locationUpdate', async (payload: LocationUpdatePayload) => {
     const player = livePlayers.get(payload.userId);
     if (player) {
       player.currentPosition = payload.point;
