@@ -866,7 +866,7 @@ app.get('/api/profile/:userId', async (req, res) => {
   const { userId } = req.params;
   try {
     const userRes = await pool.query(
-      `SELECT id, display_name, avatar_url, character_type, color, bio, cover_image_url, coins, unlocked_colors FROM users WHERE id = $1`,
+      `SELECT id, display_name, avatar_url, character_type, color, bio, cover_image_url, coins, unlocked_colors, selected_avatar, unlocked_avatars FROM users WHERE id = $1`,
       [userId]
     );
     if (!userRes.rowCount || userRes.rowCount === 0) {
@@ -1034,8 +1034,136 @@ app.post('/api/shop/unlock-color', async (req, res) => {
   }
 });
 
+// ─── Avatar Shop API ──────────────────────────────────────────────────────────
+
+// Define milestone avatars (unlocked by running distance)
+const MILESTONE_AVATARS: { avatar: string; name: string; requiredKm: number }[] = [
+  { avatar: '🦊', name: 'Swift Fox',    requiredKm: 5   },
+  { avatar: '🐺', name: 'Lone Wolf',    requiredKm: 10  },
+  { avatar: '🦁', name: 'Lion King',    requiredKm: 25  },
+  { avatar: '🦅', name: 'Soaring Eagle',requiredKm: 50  },
+  { avatar: '🐉', name: 'Dragon',       requiredKm: 100 },
+];
+
+// Define premium avatars (unlocked by coins)
+const PREMIUM_AVATARS: { avatar: string; name: string; cost: number }[] = [
+  { avatar: '🤖', name: 'Cyborg',    cost: 150 },
+  { avatar: '🦄', name: 'Unicorn',   cost: 150 },
+  { avatar: '👾', name: 'Ghost',     cost: 150 },
+  { avatar: '⚡', name: 'Lightning', cost: 150 },
+  { avatar: '🌟', name: 'Star',      cost: 150 },
+];
+
+// Check and grant milestone avatars automatically
+app.post('/api/shop/check-milestones', async (req, res) => {
+  const { userId } = req.body;
+  if (!userId) return res.status(400).json({ error: 'Missing userId' });
+  try {
+    const userRes = await pool.query(
+      'SELECT unlocked_avatars FROM users WHERE id = $1',
+      [userId]
+    );
+    if (!userRes.rowCount) return res.status(404).json({ error: 'User not found' });
+
+    const statsRes = await pool.query(
+      'SELECT COALESCE(SUM(distance_meters), 0)::float AS total_distance FROM runs WHERE user_id = $1',
+      [userId]
+    );
+    const totalKm = (statsRes.rows[0]?.total_distance || 0) / 1000;
+    const currentUnlocked: string[] = userRes.rows[0]?.unlocked_avatars || [];
+    const newlyUnlocked: string[] = [];
+
+    for (const milestone of MILESTONE_AVATARS) {
+      if (totalKm >= milestone.requiredKm && !currentUnlocked.includes(milestone.avatar)) {
+        currentUnlocked.push(milestone.avatar);
+        newlyUnlocked.push(milestone.avatar);
+      }
+    }
+
+    if (newlyUnlocked.length > 0) {
+      await pool.query(
+        'UPDATE users SET unlocked_avatars = $1 WHERE id = $2',
+        [currentUnlocked, userId]
+      );
+    }
+
+    res.json({ newlyUnlocked, unlockedAvatars: currentUnlocked, totalKm });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Unlock a premium avatar with coins
+app.post('/api/shop/unlock-avatar', async (req, res) => {
+  const { userId, avatar } = req.body;
+  if (!userId || !avatar) return res.status(400).json({ error: 'Missing userId or avatar' });
+
+  const premiumAvatar = PREMIUM_AVATARS.find(a => a.avatar === avatar);
+  if (!premiumAvatar) return res.status(400).json({ error: 'Invalid premium avatar' });
+
+  try {
+    const userRes = await pool.query(
+      'SELECT coins, unlocked_avatars FROM users WHERE id = $1',
+      [userId]
+    );
+    if (!userRes.rowCount) return res.status(404).json({ error: 'User not found' });
+
+    const { coins, unlocked_avatars } = userRes.rows[0];
+    const currentUnlocked: string[] = unlocked_avatars || [];
+
+    if (currentUnlocked.includes(avatar)) {
+      return res.status(400).json({ error: 'Avatar already unlocked' });
+    }
+    if ((coins || 0) < premiumAvatar.cost) {
+      return res.status(400).json({ error: `Insufficient Arena Coins. Need ${premiumAvatar.cost} coins.` });
+    }
+
+    const newUnlocked = [...currentUnlocked, avatar];
+    await pool.query(
+      'UPDATE users SET coins = coins - $1, unlocked_avatars = $2 WHERE id = $3',
+      [premiumAvatar.cost, newUnlocked, userId]
+    );
+    res.json({ success: true, avatar, remainingCoins: (coins || 0) - premiumAvatar.cost, unlockedAvatars: newUnlocked });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Set the user's active/selected avatar
+app.post('/api/shop/set-avatar', async (req, res) => {
+  const { userId, avatar } = req.body;
+  if (!userId || !avatar) return res.status(400).json({ error: 'Missing userId or avatar' });
+
+  try {
+    const userRes = await pool.query(
+      'SELECT unlocked_avatars FROM users WHERE id = $1',
+      [userId]
+    );
+    if (!userRes.rowCount) return res.status(404).json({ error: 'User not found' });
+
+    const currentUnlocked: string[] = userRes.rows[0]?.unlocked_avatars || [];
+    if (!currentUnlocked.includes(avatar)) {
+      return res.status(403).json({ error: 'Avatar not unlocked yet' });
+    }
+
+    await pool.query('UPDATE users SET selected_avatar = $1 WHERE id = $2', [avatar, userId]);
+    res.json({ success: true, selectedAvatar: avatar });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get all avatar definitions (milestone + premium) for the shop
+app.get('/api/shop/avatars', (req, res) => {
+  res.json({
+    milestones: MILESTONE_AVATARS,
+    premium: PREMIUM_AVATARS,
+  });
+});
+
 // Fetch nearby runners recommendation
 app.get('/api/community/nearby', async (req, res) => {
+
   const { userId, lat, lng } = req.query;
   if (!userId) {
     return res.status(400).json({ error: 'Missing userId query parameter' });

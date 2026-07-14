@@ -12,19 +12,19 @@ export const AdminAuthProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [token, setToken] = useState<string | null>(null);
 
   useEffect(() => {
-    const savedToken = localStorage.getItem('runwars_admin_token');
+    const savedToken = localStorage.getItem('strideclash_admin_token');
     if (savedToken) {
       setToken(savedToken);
     }
   }, []);
 
   const login = (secret: string) => {
-    localStorage.setItem('runwars_admin_token', secret);
+    localStorage.setItem('strideclash_admin_token', secret);
     setToken(secret);
   };
 
   const logout = () => {
-    localStorage.removeItem('runwars_admin_token');
+    localStorage.removeItem('strideclash_admin_token');
     setToken(null);
   };
 

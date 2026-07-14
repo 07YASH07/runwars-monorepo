@@ -110,7 +110,7 @@ export default function LoginScreen({ navigation }: Props) {
         >
           🏃
         </Animated.Text>
-        <Text style={styles.logoTitle}>RunWars</Text>
+        <Text style={styles.logoTitle}>StrideClash</Text>
         <Text style={styles.logoSubtitle}>Claim the streets. Rule the city.</Text>
       </View>
 

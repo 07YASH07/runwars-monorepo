@@ -114,7 +114,7 @@ export default function PostRunScreen() {
   const viewShotRef = useRef<any>(null);
 
   const [composerVisible, setComposerVisible] = React.useState(false);
-  const [postContent, setPostContent] = React.useState(`Just completed a ${distanceKm}km run and claimed ${areaSquareMeters.toFixed(0)}m² of territory in RunWars! 🏃‍♂️💨`);
+  const [postContent, setPostContent] = React.useState(`Just completed a ${distanceKm}km run and claimed ${areaSquareMeters.toFixed(0)}m² of territory in StrideClash! 🏃‍♂️💨`);
   const [submittingPost, setSubmittingPost] = React.useState(false);
 
   useEffect(() => {
@@ -245,7 +245,7 @@ export default function PostRunScreen() {
                     </Marker>
                   </MapView>
                   <View style={styles.watermark}>
-                    <Text style={styles.watermarkText}>RUNWARS</Text>
+                    <Text style={styles.watermarkText}>STRIDECLASH</Text>
                   </View>
                 </View>
               )}

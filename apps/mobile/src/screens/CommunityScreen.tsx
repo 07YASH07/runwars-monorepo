@@ -209,7 +209,7 @@ export default function CommunityScreen() {
         <View style={styles.infoCard}>
           <Text style={styles.infoCardTitle}>⚔️ CONQUER AND CLAIM</Text>
           <Text style={styles.infoCardBody}>
-            RunWars is a real-time multiplayer battleground. Start a run in your local area to claim territories, or run through an opponent's territory with a higher speed or total distance to capture it!
+            StrideClash is a real-time multiplayer battleground. Start a run in your local area to claim territories, or run through an opponent's territory with a higher speed or total distance to capture it!
           </Text>
         </View>
 

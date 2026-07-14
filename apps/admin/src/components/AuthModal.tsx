@@ -40,7 +40,7 @@ export default function AuthModal() {
         
         <h2 style={{ marginBottom: '8px' }}>Admin Access Verification</h2>
         <p style={{ color: 'var(--text-secondary)', marginBottom: '24px', fontSize: '14px' }}>
-          Enter your RunWars administration secret key to proceed.
+          Enter your StrideClash administration secret key to proceed.
         </p>
 
         <form onSubmit={handleSubmit}>

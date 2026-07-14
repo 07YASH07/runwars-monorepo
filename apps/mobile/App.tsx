@@ -167,7 +167,7 @@ function RootRouter() {
     return (
       <View style={loadingStyles.container}>
         <Text style={loadingStyles.logo}>🏃</Text>
-        <Text style={loadingStyles.title}>RunWars</Text>
+        <Text style={loadingStyles.title}>StrideClash</Text>
         <ActivityIndicator color="#00BFFF" style={{ marginTop: 24 }} />
       </View>
     );

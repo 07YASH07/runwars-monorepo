@@ -43,6 +43,8 @@ interface ProfileStats {
   cover_image_url?: string;
   coins?: number;
   unlocked_colors?: string[];
+  selected_avatar?: string;
+  unlocked_avatars?: string[];
 }
 
 interface RunEntry {
@@ -301,6 +303,26 @@ export default function ProfileScreen() {
   ];
 
   const [unlockingColor, setUnlockingColor] = useState<string | null>(null);
+  const [avatarShopVisible, setAvatarShopVisible] = useState(false);
+  const [unlockingAvatar, setUnlockingAvatar] = useState<string | null>(null);
+  const [settingAvatar, setSettingAvatar] = useState<string | null>(null);
+  const [newlyUnlockedAvatars, setNewlyUnlockedAvatars] = useState<string[]>([]);
+
+  // Milestone avatar definitions (mirror server)
+  const milestoneAvatars = [
+    { avatar: '🦊', name: 'Swift Fox',     requiredKm: 5   },
+    { avatar: '🐺', name: 'Lone Wolf',     requiredKm: 10  },
+    { avatar: '🦁', name: 'Lion King',     requiredKm: 25  },
+    { avatar: '🦅', name: 'Soaring Eagle', requiredKm: 50  },
+    { avatar: '🐉', name: 'Dragon',        requiredKm: 100 },
+  ];
+  const premiumAvatars = [
+    { avatar: '🤖', name: 'Cyborg',    cost: 150 },
+    { avatar: '🦄', name: 'Unicorn',   cost: 150 },
+    { avatar: '👾', name: 'Ghost',     cost: 150 },
+    { avatar: '⚡', name: 'Lightning', cost: 150 },
+    { avatar: '🌟', name: 'Star',      cost: 150 },
+  ];
 
   const handleUnlockColor = async (colorHex: string) => {
     if (!user?.uid) return;
@@ -328,6 +350,80 @@ export default function ProfileScreen() {
       Alert.alert('Error', 'Network request failed.');
     } finally {
       setUnlockingColor(null);
+    }
+  };
+
+  const handleCheckMilestones = async () => {
+    if (!user?.uid) return;
+    try {
+      const res = await fetch(`${API_URL}/api/shop/check-milestones`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: user.uid }),
+      });
+      const data = await res.json();
+      if (res.ok && data.newlyUnlocked?.length > 0) {
+        setNewlyUnlockedAvatars(data.newlyUnlocked);
+        Alert.alert(
+          '🎉 New Avatar Unlocked!',
+          `You've earned: ${data.newlyUnlocked.join(' ')}
+Check the Avatar Shop to equip it!`
+        );
+        fetchProfile();
+      }
+    } catch (err) {
+      console.error('[Milestones] check failed:', err);
+    }
+  };
+
+  const handleUnlockPremiumAvatar = async (avatar: string, cost: number) => {
+    if (!user?.uid) return;
+    const userCoins = stats?.coins ?? 0;
+    if (userCoins < cost) {
+      Alert.alert('Insufficient Coins', `Need ${cost} Arena Coins. You have ${userCoins}.`);
+      return;
+    }
+    setUnlockingAvatar(avatar);
+    try {
+      const res = await fetch(`${API_URL}/api/shop/unlock-avatar`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: user.uid, avatar }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        Alert.alert('Unlocked!', `${avatar} ${data.avatar} added to your collection!`);
+        fetchProfile();
+      } else {
+        Alert.alert('Error', data.error || 'Failed to unlock avatar.');
+      }
+    } catch (err) {
+      console.error(err);
+      Alert.alert('Error', 'Network request failed.');
+    } finally {
+      setUnlockingAvatar(null);
+    }
+  };
+
+  const handleSetAvatar = async (avatar: string) => {
+    if (!user?.uid) return;
+    setSettingAvatar(avatar);
+    try {
+      const res = await fetch(`${API_URL}/api/shop/set-avatar`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: user.uid, avatar }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        fetchProfile();
+      } else {
+        Alert.alert('Error', data.error || 'Failed to set avatar.');
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setSettingAvatar(null);
     }
   };
 
@@ -724,7 +820,121 @@ export default function ProfileScreen() {
                 </View>
               </View>
 
+              {/* Avatar Shop */}
+              <View style={styles.panelCard}>
+                <View style={styles.shopHeaderRow}>
+                  <Text style={styles.panelTitle}>AVATAR SHOP</Text>
+                  <TouchableOpacity
+                    style={styles.checkMilestoneBtn}
+                    onPress={handleCheckMilestones}
+                  >
+                    <Text style={styles.checkMilestoneBtnText}>🏆 Check Milestones</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* Currently selected avatar */}
+                <View style={styles.activeAvatarRow}>
+                  <Text style={styles.shopSubText}>Active Avatar:</Text>
+                  <View style={[styles.activeAvatarBubble, { borderColor: color }]}>
+                    <Text style={styles.activeAvatarEmoji}>
+                      {stats?.selected_avatar || CHARACTER_EMOJI[stats?.character_type as CharacterType] || '🏃'}
+                    </Text>
+                  </View>
+                </View>
+
+                {/* Unlocked Avatars Collection */}
+                {stats?.unlocked_avatars && stats.unlocked_avatars.length > 0 && (
+                  <View style={styles.collectionBox}>
+                    <Text style={styles.shopSubSection}>YOUR COLLECTION</Text>
+                    <View style={styles.avatarRow}>
+                      {stats.unlocked_avatars.map((av, idx) => {
+                        const isActive = av === (stats?.selected_avatar || '🏃');
+                        return (
+                          <TouchableOpacity
+                            key={av + idx}
+                            style={[
+                              styles.avatarSlot,
+                              isActive && { borderColor: color, borderWidth: 2 },
+                            ]}
+                            onPress={() => handleSetAvatar(av)}
+                            disabled={settingAvatar !== null}
+                          >
+                            <Text style={styles.avatarSlotEmoji}>{av}</Text>
+                            {isActive && (
+                              <View style={[styles.activeIndicatorDot, { backgroundColor: color }]} />
+                            )}
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  </View>
+                )}
+
+                {/* Milestone Avatars */}
+                <Text style={[styles.shopSubSection, { marginTop: 16 }]}>🏅 MILESTONE REWARDS</Text>
+                <Text style={styles.shopSubText}>Run farther to unlock avatar companions</Text>
+                <View style={styles.shopGrid}>
+                  {milestoneAvatars.map(m => {
+                    const totalKm = (stats?.total_distance || 0) / 1000;
+                    const isUnlocked = stats?.unlocked_avatars?.includes(m.avatar);
+                    const pct = Math.min((totalKm / m.requiredKm) * 100, 100);
+                    return (
+                      <View key={m.avatar} style={styles.shopItem}>
+                        <View style={styles.avatarShopLeft}>
+                          <Text style={styles.avatarShopEmoji}>{m.avatar}</Text>
+                          <Text style={styles.avatarShopKm}>{m.requiredKm} km</Text>
+                        </View>
+                        <View style={styles.avatarShopCenter}>
+                          <Text style={styles.shopColorName}>{m.name}</Text>
+                          {isUnlocked ? (
+                            <View style={styles.unlockedBadge}>
+                              <Text style={styles.unlockedText}>✓ Unlocked</Text>
+                            </View>
+                          ) : (
+                            <View style={styles.progressBarContainer}>
+                              <View style={[styles.progressBarTrack]}>
+                                <View style={[styles.progressBarFill, { width: `${pct}%` as any, backgroundColor: color }]} />
+                              </View>
+                              <Text style={styles.progressBarLabel}>{totalKm.toFixed(1)} / {m.requiredKm} km</Text>
+                            </View>
+                          )}
+                        </View>
+                      </View>
+                    );
+                  })}
+                </View>
+
+                {/* Premium Avatars */}
+                <Text style={[styles.shopSubSection, { marginTop: 20 }]}>💎 PREMIUM AVATARS</Text>
+                <Text style={styles.shopSubText}>Spend 150 Arena Coins for exclusive avatars</Text>
+                <View style={styles.shopGrid}>
+                  {premiumAvatars.map(p => {
+                    const isUnlocked = stats?.unlocked_avatars?.includes(p.avatar);
+                    return (
+                      <View key={p.avatar} style={styles.shopItem}>
+                        <Text style={styles.avatarShopEmoji}>{p.avatar}</Text>
+                        <Text style={[styles.shopColorName, { flex: 1, marginLeft: 4 }]}>{p.name}</Text>
+                        {isUnlocked ? (
+                          <View style={styles.unlockedBadge}>
+                            <Text style={styles.unlockedText}>✓ Unlocked</Text>
+                          </View>
+                        ) : (
+                          <TouchableOpacity
+                            style={styles.unlockBtn}
+                            onPress={() => handleUnlockPremiumAvatar(p.avatar, p.cost)}
+                            disabled={unlockingAvatar !== null}
+                          >
+                            <Text style={styles.unlockBtnText}>🪙 150</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    );
+                  })}
+                </View>
+              </View>
+
               {/* Run History list */}
+
               <View style={styles.panelCard}>
                 <Text style={styles.panelTitle}>RUN LOGS</Text>
                 {runs.length === 0 ? (
@@ -964,7 +1174,7 @@ export default function ProfileScreen() {
                 <ViewShot ref={viewShotRef} options={{ format: 'jpg', quality: 0.9 }}>
                   <View style={styles.detailCardShot}>
                     <View style={styles.detailCardHeader}>
-                      <Text style={styles.detailCardTitle}>RUNWARS ARENA RUN</Text>
+                      <Text style={styles.detailCardTitle}>STRIDECLASH ARENA RUN</Text>
                       <Text style={styles.detailCardDate}>{formatDate(selectedRun.created_at)}</Text>
                     </View>
 
@@ -1490,6 +1700,27 @@ const styles = StyleSheet.create({
   unlockedText: { color: '#00FA9A', fontSize: 10, fontWeight: '900' },
   unlockBtn: { backgroundColor: '#FFD700', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 6 },
   unlockBtnText: { color: '#0D0D1A', fontSize: 11, fontWeight: '900' },
+
+  // Avatar Shop Styles
+  checkMilestoneBtn: { backgroundColor: '#2A2A4A', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: '#FFD70044' },
+  checkMilestoneBtnText: { color: '#FFD700', fontSize: 10, fontWeight: '900' },
+  activeAvatarRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 12 },
+  activeAvatarBubble: { width: 52, height: 52, borderRadius: 26, borderWidth: 2, alignItems: 'center', justifyContent: 'center', backgroundColor: '#16162A' },
+  activeAvatarEmoji: { fontSize: 28 },
+  collectionBox: { backgroundColor: '#16162A', borderRadius: 10, borderWidth: 1, borderColor: '#2A2A4A', padding: 12, marginBottom: 12 },
+  shopSubSection: { fontSize: 10, fontWeight: '900', color: '#4A4A6A', letterSpacing: 1.2, marginBottom: 8 },
+  avatarRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  avatarSlot: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0D0D1A', borderWidth: 1, borderColor: '#2A2A4A', position: 'relative' },
+  avatarSlotEmoji: { fontSize: 22 },
+  activeIndicatorDot: { position: 'absolute', bottom: 1, right: 1, width: 8, height: 8, borderRadius: 4, borderWidth: 1, borderColor: '#0D0D1A' },
+  progressBarContainer: { width: '100%', gap: 3 },
+  progressBarFill: { height: 4, borderRadius: 2 },
+  progressBarLabel: { fontSize: 9, color: '#8A8AAB', fontWeight: '700' },
+  progressBarTrack: { width: '100%', height: 4, backgroundColor: '#2A2A4A', borderRadius: 2, overflow: 'hidden' },
+  avatarShopLeft: { width: 52, alignItems: 'center', marginRight: 12 },
+  avatarShopEmoji: { fontSize: 26 },
+  avatarShopKm: { fontSize: 9, color: '#8A8AAB', fontWeight: '700', marginTop: 2 },
+  avatarShopCenter: { flex: 1, gap: 6 },
 
   // Friends Tab Styles
   friendRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#16162A', borderWidth: 1, borderColor: '#2A2A4A', borderRadius: 8, padding: 10, marginBottom: 10 },

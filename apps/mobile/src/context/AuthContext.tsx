@@ -103,7 +103,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
           const projectId = Constants?.expoConfig?.extra?.eas?.projectId ?? Constants?.easConfig?.projectId;
           const tokenData = await Notifications.getExpoPushTokenAsync({
-            projectId: projectId && projectId !== 'your-eas-project-id' ? projectId : 'b212f0ad-ab87-4340-a159-867df3c15814'
+            projectId: projectId && projectId !== 'your-eas-project-id' ? projectId : 'd957dd92-6e79-494f-9173-b05d21ebe446'
           });
           const token = tokenData.data;
           

@@ -17,7 +17,7 @@ const Sidebar = () => {
     <div className="sidebar">
       <div style={{ padding: '24px', display: 'flex', alignItems: 'center', gap: '12px', borderBottom: '1px solid var(--border)' }}>
         <ShieldAlert color="var(--accent-blue)" />
-        <h2 style={{ fontSize: '18px', margin: 0, letterSpacing: '1px' }}>RunWars <span style={{ color: 'var(--accent-blue)' }}>Ops</span></h2>
+        <h2 style={{ fontSize: '18px', margin: 0, letterSpacing: '1px' }}>StrideClash <span style={{ color: 'var(--accent-blue)' }}>Ops</span></h2>
       </div>
       
       <nav style={{ padding: '24px 12px', flex: 1, display: 'flex', flexDirection: 'column', gap: '8px' }}>

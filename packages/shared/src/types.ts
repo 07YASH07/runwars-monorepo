@@ -16,6 +16,8 @@ export interface User {
   totalDistanceMeters: number;
   totalTerritoryClaimed: number;
   color: string; // hex, e.g. "#FF4D4D"
+  selectedAvatar?: string;       // emoji avatar currently shown
+  unlockedAvatars?: string[];    // all avatars this user has earned
 }
 
 // ─── Geo & Location ───────────────────────────────────────────────────────────

@@ -37,7 +37,7 @@ export default function AuthScreen() {
     >
       <View style={styles.content}>
         <View style={styles.header}>
-          <Text style={styles.title}>RUNWARS</Text>
+          <Text style={styles.title}>STRIDECLASH</Text>
           <Text style={styles.subtitle}>{isLogin ? 'Welcome Back, Runner' : 'Join the Battle'}</Text>
         </View>
 
