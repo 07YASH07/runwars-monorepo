@@ -275,15 +275,25 @@ export default function RunScreen() {
         });
       }
 
-      // 3. Listen for territory stolen events
+      // 3. Listen for territory:stolen (your territory was taken)
       socketService.socket?.on('territory:stolen', (data: { byPlayerName: string; byPlayerColor: string }) => {
         setConflictDetails({ name: data.byPlayerName, color: data.byPlayerColor });
         setConflictVisible(true);
         setTimeout(() => setConflictVisible(false), 4000);
       });
+
+      // 4. Listen for pvp:warning (you entered someone else's territory)
+      socketService.socket?.on('pvp:warning', (data: { message: string }) => {
+        Alert.alert(
+          '⚠️ Enemy Territory!',
+          data.message || 'You have entered a territory owned by another runner. Run faster or claim it!',
+          [{ text: 'Got it!', style: 'cancel' }],
+          { cancelable: true }
+        );
+      });
     };
 
-    // 4. Listen for background location updates
+    // 5. Listen for background location updates
     const bgSub = DeviceEventEmitter.addListener('backgroundLocationUpdate', ({ points, speedKmh }) => {
       points.forEach((pt: any) => {
         dispatch({ type: 'ADD_POINT', point: pt, speedKmh });
@@ -294,6 +304,7 @@ export default function RunScreen() {
 
     return () => {
       socketService.socket?.off('territory:stolen');
+      socketService.socket?.off('pvp:warning');
       bgSub.remove();
     };
   }, [user?.uid]);
@@ -305,7 +316,7 @@ export default function RunScreen() {
       if (permission === 'denied') {
         Alert.alert(
           'Location Required',
-          'RunWars needs location access to track your run. Please enable it in Settings.',
+          'StrideClash needs location access to track your run. Please enable it in Settings.',
           [{ text: 'OK' }]
         );
         return;

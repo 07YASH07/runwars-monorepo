@@ -338,24 +338,43 @@ io.on('connection', async (socket: Socket) => {
         if (t.userId !== payload.userId) {
           const inTerritory = isPointInPolygon(payload.point, t.polygonCoordinates);
           if (inTerritory) {
-            const ownerPushToken = pushTokens.get(t.userId);
-            if (ownerPushToken) {
-              const spamKey = `${t.id}_${payload.userId}`;
-              const lastAlert = lastAlerts.get(spamKey);
-              const now = Date.now();
-              if (!lastAlert || (now - lastAlert > 300000)) { // 5-minute cooldown
-                lastAlerts.set(spamKey, now);
+            const spamKey = `${t.id}_${payload.userId}`;
+            const lastAlert = lastAlerts.get(spamKey);
+            const now = Date.now();
+
+            if (!lastAlert || (now - lastAlert > 300000)) { // 5-minute cooldown
+              lastAlerts.set(spamKey, now);
+
+              // Get push token: prefer in-memory (online user), fall back to DB (offline user)
+              let ownerPushToken = pushTokens.get(t.userId);
+              if (!ownerPushToken) {
+                try {
+                  const tokenRes = await pool.query(
+                    'SELECT expo_push_token FROM users WHERE id = $1',
+                    [t.userId]
+                  );
+                  ownerPushToken = tokenRes.rows[0]?.expo_push_token;
+                  if (ownerPushToken) {
+                    // Cache it for future lookups
+                    pushTokens.set(t.userId, ownerPushToken);
+                  }
+                } catch (dbErr: any) {
+                  console.error('[Push] Failed to fetch owner push token from DB:', dbErr.message);
+                }
+              }
+
+              if (ownerPushToken) {
                 sendPushNotification(
                   ownerPushToken,
                   '⚠️ Territory Alert!',
-                  `Runner ${player.displayName || 'someone'} has entered your territory (Zone ${t.id.substring(0, 6)})!`
+                  `${player.displayName || 'A runner'} has entered your zone! Get back out there!`
                 ).catch(console.error);
-
-                // Send in-app PvP warning alert to the invader
-                socket.emit('pvp:warning', {
-                  message: `⚠️ Warning: You have entered territory owned by another runner!`
-                });
               }
+
+              // Also send in-app PvP warning alert to the invader (only if they're online)
+              socket.emit('pvp:warning', {
+                message: `⚠️ Warning: You have entered a zone owned by ${t.ownerName || 'another runner'}! Outrun them to capture it!`
+              });
             }
           }
         }
