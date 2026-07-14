@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "665692158719",
+    "project_id": "runwars-355df",
+    "storage_bucket": "runwars-355df.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:665692158719:android:30b6069b356db5de11eaca",
+        "android_client_info": {
+          "package_name": "com.runwars.v2"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyClyMm25cgWizoWalDQH1d0WZACh5PV7fc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
