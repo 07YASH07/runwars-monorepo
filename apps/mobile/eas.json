@@ -9,9 +9,32 @@
       "distribution": "internal"
     },
     "preview": {
-      "distribution": "internal"
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_FIREBASE_API_KEY": "AIzaSyAMmESntgDg4TygI7nD-ZIt9hJxfm8IlU0",
+        "EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN": "runwars-355df.firebaseapp.com",
+        "EXPO_PUBLIC_FIREBASE_PROJECT_ID": "runwars-355df",
+        "EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET": "runwars-355df.firebasestorage.app",
+        "EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID": "665692158719",
+        "EXPO_PUBLIC_FIREBASE_APP_ID": "1:665692158719:web:c0e555981141bd0311eaca",
+        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": "AIzaSyDdCyNTVWTsmMsVj00d33-DGfMWXgrai6s",
+        "EXPO_PUBLIC_BACKEND_URL": "https://runwars-v2.onrender.com",
+        "EXPO_PUBLIC_SOCKET_URL": "https://runwars-v2.onrender.com"
+      }
     },
-    "production": {}
+    "production": {
+      "env": {
+        "EXPO_PUBLIC_FIREBASE_API_KEY": "AIzaSyAMmESntgDg4TygI7nD-ZIt9hJxfm8IlU0",
+        "EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN": "runwars-355df.firebaseapp.com",
+        "EXPO_PUBLIC_FIREBASE_PROJECT_ID": "runwars-355df",
+        "EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET": "runwars-355df.firebasestorage.app",
+        "EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID": "665692158719",
+        "EXPO_PUBLIC_FIREBASE_APP_ID": "1:665692158719:web:c0e555981141bd0311eaca",
+        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": "AIzaSyDdCyNTVWTsmMsVj00d33-DGfMWXgrai6s",
+        "EXPO_PUBLIC_BACKEND_URL": "https://runwars-v2.onrender.com",
+        "EXPO_PUBLIC_SOCKET_URL": "https://runwars-v2.onrender.com"
+      }
+    }
   },
   "submit": {
     "production": {}
