@@ -25,7 +25,7 @@ module.exports = {
     ],
     ios: {
       supportsTablet: false,
-      bundleIdentifier: "com.strideclash.v2",
+      bundleIdentifier: "com.runwars.v2",
       config: {
         googleMapsApiKey: "YOUR_IOS_GOOGLE_MAPS_API_KEY"
       },
@@ -42,7 +42,7 @@ module.exports = {
         backgroundImage: "./assets/android-icon-background.png",
         monochromeImage: "./assets/android-icon-monochrome.png"
       },
-      package: "com.strideclash.v2",
+      package: "com.runwars.v2",
       googleServicesFile: process.env.GOOGLE_SERVICES_JSON || "./google-services.json",
       config: {
         googleMaps: {
