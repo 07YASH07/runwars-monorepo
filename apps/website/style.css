@@ -217,9 +217,9 @@ h1, h2, h3, h4, .brand-name {
   left: 0;
   width: 100%;
   z-index: 1000;
-  background: rgba(4, 4, 10, 0.75);
+  background: rgba(4, 4, 10, 0.8);
   backdrop-filter: blur(20px);
-  padding: 0.9rem 0;
+  padding: 0.75rem 0; /* Sleeker, structured padding */
   transition: var(--transition-smooth);
 }
 
@@ -247,12 +247,12 @@ h1, h2, h3, h4, .brand-name {
 .brand {
   display: flex;
   align-items: center;
-  gap: 0.85rem;
+  gap: 0.75rem;
 }
 
 .nav-logo {
-  height: 44px;
-  width: 44px;
+  height: 38px; /* Perfectly sized logo */
+  width: 38px;
   object-fit: contain;
   filter: drop-shadow(0 0 8px rgba(0, 242, 254, 0.4));
   transition: var(--transition-smooth);
@@ -263,9 +263,10 @@ h1, h2, h3, h4, .brand-name {
 }
 
 .brand-name {
-  font-size: 2rem;
-  font-weight: 700;
+  font-size: 1.75rem; /* Clean and balanced size */
+  font-weight: 800;
   color: var(--text-primary);
+  line-height: 1;
 }
 .brand-name span {
   color: var(--accent-orange);
@@ -274,16 +275,18 @@ h1, h2, h3, h4, .brand-name {
 .nav-links {
   list-style: none;
   display: flex;
-  gap: 2.5rem;
+  gap: 2.2rem;
+  align-items: center; /* Vertically centers navigation items */
 }
 
 .nav-links a {
   font-family: var(--font-title);
-  font-size: 1.15rem;
+  font-size: 1.05rem; /* Structured, non-oversized links */
+  font-weight: 600;
   text-transform: uppercase;
   color: var(--text-secondary);
   transition: var(--transition-smooth);
-  letter-spacing: 0.5px;
+  letter-spacing: 0.75px;
   position: relative;
   padding: 0.4rem 0;
 }
@@ -307,6 +310,13 @@ h1, h2, h3, h4, .brand-name {
 .nav-links a:hover {
   color: var(--accent-cyan);
   text-shadow: 0 0 8px rgba(0, 242, 254, 0.3);
+}
+
+/* Sized navigation CTA button to balance structure */
+.nav-cta {
+  padding: 0.5rem 1.4rem !important;
+  font-size: 0.95rem !important;
+  border-radius: 4px !important;
 }
 
 /* Hero Section */
