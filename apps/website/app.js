@@ -96,6 +96,9 @@ document.addEventListener('DOMContentLoaded', () => {
       betaForm.style.display = 'block';
     });
   }
+
+  // Initialize Live Conquest Map
+  initializeMap();
 });
 
 // Fetch Rankings & Render Leaderboard Table
@@ -215,3 +218,193 @@ function getOfflineDemoData() {
 
   return mockData;
 }
+
+// ============================================================
+// Leaflet Map Logic - Live Conquest Zones Display
+// ============================================================
+let mapObj;
+let mapLayers = [];
+
+function initializeMap() {
+  if (!document.getElementById('conquest-map')) return;
+
+  // New Delhi center Connaught Place coordinates
+  const defaultCenter = [28.6304, 77.2177];
+  
+  // Initialize Leaflet map instance
+  mapObj = L.map('conquest-map', {
+    zoomControl: true,
+    scrollWheelZoom: false
+  }).setView(defaultCenter, 14);
+
+  // Add CartoDB Dark Matter tile layer
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+    maxZoom: 20
+  }).addTo(mapObj);
+
+  loadMapTerritories();
+}
+
+async function loadMapTerritories() {
+  try {
+    const response = await fetch(`${BACKEND_URL}/territories`);
+    if (!response.ok) {
+      throw new Error('Failed to fetch territories list');
+    }
+    const territories = await response.json();
+
+    if (territories && territories.length > 0) {
+      renderMapTerritories(territories);
+    } else {
+      console.warn('[Map] No active territories on server. Displaying offline demo sectors.');
+      renderMapTerritories(getDemoMapTerritories());
+    }
+  } catch (err) {
+    console.error('[Map] Fetch failure, loading offline demo data:', err.message);
+    renderMapTerritories(getDemoMapTerritories());
+  }
+}
+
+function renderMapTerritories(territories) {
+  // Clear any existing polygons
+  mapLayers.forEach(layer => mapObj.removeLayer(layer));
+  mapLayers = [];
+
+  const legendItems = document.getElementById('map-legend-items');
+  if (legendItems) {
+    legendItems.innerHTML = '';
+  }
+
+  const ownerStats = {};
+  const bounds = [];
+
+  territories.forEach(t => {
+    // Resolve coordinates from model schema
+    let coords = t.polygonCoordinates || t.polygon_coordinates;
+    if (!coords || !Array.isArray(coords) || coords.length < 3) {
+      return;
+    }
+
+    const color = t.color || '#00f2fe';
+    const ownerName = t.ownerName || 'Runner';
+    const speed = t.avgSpeedKmh || 0;
+    const area = t.areaSquareMeters || t.area_square_meters || 0;
+    const type = t.activityType || 'run';
+
+    // Draw Leaflet polygon
+    const polygon = L.polygon(coords, {
+      color: color,
+      fillColor: color,
+      fillOpacity: 0.35,
+      weight: 2
+    }).addTo(mapObj);
+
+    // Dynamic Leaflet Popup template
+    const popupContent = `
+      <div style="font-family: 'Outfit', sans-serif; color: #fff; padding: 4px; line-height: 1.4;">
+        <h4 style="font-family: 'Rajdhani', sans-serif; margin-bottom: 6px; text-transform: uppercase; color: ${color}; font-size: 1.1rem; font-weight: 700; letter-spacing: 0.5px;">
+          Sector #${t.id || 'Active'}
+        </h4>
+        <p style="margin: 2px 0; font-size: 0.9rem;"><b>Conquered by:</b> ${ownerName}</p>
+        <p style="margin: 2px 0; font-size: 0.9rem;"><b>Avg Speed:</b> ${speed ? speed.toFixed(1) : '0.0'} km/h</p>
+        <p style="margin: 2px 0; font-size: 0.9rem;"><b>Area:</b> ${Math.round(area).toLocaleString()} m²</p>
+        <p style="margin: 2px 0; font-size: 0.9rem; text-transform: capitalize;"><b>Activity:</b> ${type}</p>
+      </div>
+    `;
+    polygon.bindPopup(popupContent);
+    mapLayers.push(polygon);
+
+    // Collect coordinates bounds
+    coords.forEach(pt => {
+      bounds.push(L.latLng(pt[0], pt[1]));
+    });
+
+    // Update statistics
+    if (!ownerStats[ownerName]) {
+      ownerStats[ownerName] = { color: color, zones: 0 };
+    }
+    ownerStats[ownerName].zones += 1;
+  });
+
+  // Render list legend elements
+  if (legendItems) {
+    Object.keys(ownerStats).forEach(name => {
+      const stats = ownerStats[name];
+      const div = document.createElement('div');
+      div.className = 'legend-item';
+      div.innerHTML = `
+        <span class="legend-color" style="background-color: ${stats.color}; box-shadow: 0 0 8px ${stats.color};"></span>
+        <div class="legend-info">
+          <span class="legend-name">${name}</span>
+          <span class="legend-zones">${stats.zones} sector${stats.zones > 1 ? 's' : ''} claimed</span>
+        </div>
+      `;
+      legendItems.appendChild(div);
+    });
+  }
+
+  // Adjust zoom bounds automatically
+  if (bounds.length > 0) {
+    const latLngBounds = L.latLngBounds(bounds);
+    mapObj.fitBounds(latLngBounds, { padding: [50, 50] });
+  }
+}
+
+// Generate offline demo hexagons around Central Delhi center Connaught Place for display
+function getDemoMapTerritories() {
+  const centerLat = 28.6304;
+  const centerLng = 77.2177;
+
+  // Simple Hexagon coordinate generator helper
+  const createHex = (cLat, cLng, size) => {
+    const coords = [];
+    for (let i = 0; i < 6; i++) {
+      const angle = (Math.PI / 3) * i;
+      const latOffset = (size * Math.cos(angle)) / 111.32;
+      const lngOffset = (size * Math.sin(angle)) / (111.32 * Math.cos(cLat * Math.PI / 180));
+      coords.push([cLat + latOffset, cLng + lngOffset]);
+    }
+    return coords;
+  };
+
+  return [
+    {
+      id: 201,
+      ownerName: 'Yash',
+      color: '#ff6a00',
+      avgSpeedKmh: 14.5,
+      areaSquareMeters: 45000,
+      activityType: 'run',
+      polygonCoordinates: createHex(centerLat + 0.002, centerLng + 0.003, 0.4)
+    },
+    {
+      id: 202,
+      ownerName: 'Alex_Run',
+      color: '#00f2fe',
+      avgSpeedKmh: 11.2,
+      areaSquareMeters: 45000,
+      activityType: 'run',
+      polygonCoordinates: createHex(centerLat - 0.003, centerLng - 0.002, 0.4)
+    },
+    {
+      id: 203,
+      ownerName: 'Cyborg_Fit',
+      color: '#bd00ff',
+      avgSpeedKmh: 22.4,
+      areaSquareMeters: 45000,
+      activityType: 'cycle',
+      polygonCoordinates: createHex(centerLat + 0.004, centerLng - 0.004, 0.4)
+    },
+    {
+      id: 204,
+      ownerName: 'Rivalconqueror',
+      color: '#ff3366',
+      avgSpeedKmh: 6.8,
+      areaSquareMeters: 45000,
+      activityType: 'walk',
+      polygonCoordinates: createHex(centerLat - 0.001, centerLng + 0.005, 0.4)
+    }
+  ];
+}
+

@@ -999,7 +999,156 @@ h1, h2, h3, h4, .brand-name {
   color: var(--accent-cyan);
 }
 
+/* Live Conquest Map Section */
+.map-section {
+  padding: 11rem 2rem;
+  max-width: 1200px;
+  margin: 0 auto;
+  position: relative;
+  z-index: 2;
+}
+
+.map-container-wrapper {
+  position: relative;
+  background: var(--panel-bg);
+  backdrop-filter: blur(20px);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 1.5rem;
+  box-shadow: 0 25px 50px rgba(0, 0, 0, 0.5);
+  display: grid;
+  grid-template-columns: 1fr 280px;
+  gap: 1.5rem;
+  height: 550px;
+}
+
+#conquest-map {
+  width: 100%;
+  height: 100%;
+  border-radius: 6px;
+  background: #090a10;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  z-index: 10;
+}
+
+/* Custom Leaflet Dark Map overrides */
+.leaflet-container {
+  background: #090a10 !important;
+}
+.leaflet-bar {
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  box-shadow: none !important;
+}
+.leaflet-bar a {
+  background-color: rgba(20, 20, 35, 0.9) !important;
+  color: var(--accent-cyan) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+  transition: var(--transition-smooth);
+}
+.leaflet-bar a:hover {
+  background-color: rgba(0, 242, 254, 0.1) !important;
+  color: #fff !important;
+}
+.leaflet-popup-content-wrapper {
+  background: rgba(13, 13, 26, 0.95) !important;
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--panel-border);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  border-radius: 6px !important;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5) !important;
+}
+.leaflet-popup-tip {
+  background: rgba(13, 13, 26, 0.95) !important;
+  border: 1px solid var(--panel-border);
+}
+
+.map-legend {
+  background: rgba(10, 10, 18, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  overflow-y: auto;
+}
+
+.map-legend h4 {
+  font-family: var(--font-title);
+  font-size: 1.2rem;
+  color: var(--text-primary);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-bottom: 0.5rem;
+  text-transform: uppercase;
+}
+
+#map-legend-items {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.95rem;
+}
+
+.legend-color {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.legend-info {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+
+.legend-name {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.legend-zones {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
 /* Responsive Breakpoints */
+@media (max-width: 1024px) {
+  .map-container-wrapper {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr 140px;
+    height: 700px;
+  }
+  .map-legend {
+    flex-direction: row;
+    overflow-x: auto;
+    overflow-y: hidden;
+    align-items: center;
+    padding: 1rem;
+    gap: 1.5rem;
+  }
+  .map-legend h4 {
+    border-bottom: none;
+    border-right: 1px solid rgba(255, 255, 255, 0.08);
+    padding-bottom: 0;
+    padding-right: 1rem;
+    height: 100%;
+    display: flex;
+    align-items: center;
+  }
+  #map-legend-items {
+    flex-direction: row;
+    gap: 1.5rem;
+  }
+}
+
 @media (max-width: 1024px) {
   .hero-container {
     grid-template-columns: 1fr;
