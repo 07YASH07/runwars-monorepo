@@ -3,21 +3,26 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>StrideClash - Claim Your Streets. Outrun Your Rivals.</title>
+  <title>StrideClash - Gamified Location-Based Cardio Conquest</title>
   <!-- SEO Meta Tags -->
-  <meta name="description" content="Download StrideClash, the ultimate real-time location-based multiplayer running game. Claim territories, conquer neighborhoods, and unlock premium companion avatars.">
-  <meta name="keywords" content="StrideClash, RunWars, gamified fitness, running app, territory conquest, PvP running, location-based game">
+  <meta name="description" content="Turn your workouts into multiplayer battles. Download StrideClash, claim real-world territories using GPS, outrun rivals in real-time, and unlock legendary companion avatars.">
+  <meta name="keywords" content="StrideClash, PvP running, gamified fitness, location-based PvP, AR fitness, running game, GPS conquest">
   
   <!-- Fonts & Icons -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Rajdhani:wght@500;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/lucide-static@0.1.0/font/lucide.min.css">
   
   <!-- Custom Stylesheet -->
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+
+  <!-- Background Decorative Glowing Orbs -->
+  <div class="glow-orb orb-1"></div>
+  <div class="glow-orb orb-2"></div>
+  <div class="glow-orb orb-3"></div>
 
   <!-- Navigation -->
   <nav class="navbar">
@@ -28,6 +33,7 @@
       </div>
       <ul class="nav-links">
         <li><a href="#features">Features</a></li>
+        <li><a href="#companions">Companions</a></li>
         <li><a href="#how-it-works">How It Works</a></li>
         <li><a href="#leaderboard">Leaderboard</a></li>
         <li><a href="#register">Beta Testing</a></li>
@@ -38,17 +44,26 @@
 
   <!-- Hero Section -->
   <header class="hero">
-    <div class="hero-glow"></div>
     <div class="hero-container">
       <div class="hero-content">
-        <span class="badge">⚔️ REBRANDED FROM RUNWARS v2</span>
-        <h1>CLAIM YOUR STREETS.<br><span class="highlight-text">OUTRUN YOUR RIVALS.</span></h1>
-        <p>StrideClash turns your daily running, walking, or cycling route into an active location-based multiplayer conquest. Capture zones, unlock companions, and defend your turf.</p>
+        <span class="badge">⚔️ THE FITNESS BATTLEGROUND IS LIVE</span>
+        <h1>CLAIM YOUR STREETS.<br><span class="highlight-text">CONQUER YOUR CITY.</span></h1>
+        <p class="hero-sub">StrideClash transforms physical cardio into a competitive multiplayer turf war. Your steps paint the world. Your speed defends your kingdom.</p>
         <div class="hero-actions">
           <a href="https://expo.dev/accounts/yash0909090/projects/runwars-v2/builds/2033734c-914d-4e77-8995-e257f6be8899" class="btn btn-primary btn-large">
-            Download Android APK
+             Download Standalone APK
           </a>
-          <a href="#how-it-works" class="btn btn-secondary btn-large">How It Works</a>
+          <a href="#how-it-works" class="btn btn-secondary btn-large">Explore Mechanics</a>
+        </div>
+        <div class="hero-highlights">
+          <div class="highlight-item">
+            <span class="hl-icon"><i class="class-lucide-shield-check"></i></span>
+            <span>Real-time GPS Tracking</span>
+          </div>
+          <div class="highlight-item">
+            <span class="hl-icon"><i class="class-lucide-zap"></i></span>
+            <span>Instant PvP Invasion Warnings</span>
+          </div>
         </div>
       </div>
       <div class="hero-visual">
@@ -62,33 +77,67 @@
   <!-- Core Features Section -->
   <section id="features" class="features-section">
     <div class="section-header">
-      <h2>CORE APP FEATURES</h2>
-      <p>Explore the mechanics that turn cardio workouts into high-stakes gaming battles.</p>
+      <h2>FEATURES & IN-APP MECHANICS</h2>
+      <p>A deep look at how StrideClash bridges physical movement with tactical virtual warfare.</p>
     </div>
     <div class="features-grid">
       <div class="feature-card">
         <div class="card-glow red-glow"></div>
-        <div class="feature-icon"><i class="class-lucide-map-pin"></i></div>
-        <h3>GPS Territory Mapping</h3>
-        <p>Your real-world coordinates slice the map into tactical hexagonal zones. Cross boundaries during runs to claim ownership.</p>
+        <div class="feature-icon"><i class="class-lucide-map"></i></div>
+        <h3>GPS Hex Grid Mapping</h3>
+        <p>Our backend maps your live running track onto hexagonal sectors of the city. Cross into a sector during a workout to paint it your color and claim ownership.</p>
       </div>
       <div class="feature-card">
         <div class="card-glow blue-glow"></div>
         <div class="feature-icon"><i class="class-lucide-swords"></i></div>
-        <h3>Real-time PvP Clashes</h3>
-        <p>Running into another player's territory instantly triggers in-app alerts. Outspeed them to invade and take their sector.</p>
+        <h3>Live PvP Turf Battles</h3>
+        <p>Enter an opponent's claimed zone to trigger a PvP warning popup. To conquer their sector, you must complete your session with a higher speed or total distance than their record.</p>
       </div>
       <div class="feature-card">
         <div class="card-glow orange-glow"></div>
-        <div class="feature-icon"><i class="class-lucide-bell"></i></div>
+        <div class="feature-icon"><i class="class-lucide-bell-ring"></i></div>
         <h3>Offline Guard Alerts</h3>
-        <p>Receive push notifications on your lock screen when other users invade your zones while your app is closed.</p>
+        <p>Rest easy. If a player invades your sector while you are offline, our database token fallback sends instant push notifications to your lock screen so you can plan your counterattack.</p>
       </div>
       <div class="feature-card">
         <div class="card-glow purple-glow"></div>
-        <div class="feature-icon"><i class="class-lucide-shopping-bag"></i></div>
-        <h3>Arena Shop & Avatars</h3>
-        <p>Earn coins on your runs. Unlock and buy premium futuristic companion avatars like Unicorns 🦄 and Cyborgs 🤖.</p>
+        <div class="feature-icon"><i class="class-lucide-coins"></i></div>
+        <h3>Arena Shop & Economy</h3>
+        <p>Workout metrics are converted into Arena Coins. Spend your earnings in the shop to purchase and unlock custom avatars and premium companion tags.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Companion Showcase -->
+  <section id="companions" class="companions-section">
+    <div class="section-header">
+      <h2>MEET THE COMPANIONS</h2>
+      <p>Unlock custom runner avatars through milestones or redeem them in the Arena Shop.</p>
+    </div>
+    <div class="companions-grid">
+      <div class="companion-card">
+        <span class="comp-emoji">🥷</span>
+        <h3>Shadow Ninja</h3>
+        <span class="comp-rarity free">Milestone Reward</span>
+        <p>Unlocked at the 5KM running milestone. Ideal for swift, stealthy captures.</p>
+      </div>
+      <div class="companion-card">
+        <span class="comp-emoji">🤖</span>
+        <h3>Cyber Cyborg</h3>
+        <span class="comp-rarity premium">Arena Shop Exclusive</span>
+        <p>Buyable with 150 Arena Coins. Outrun rivals with robotic mechanical power.</p>
+      </div>
+      <div class="companion-card">
+        <span class="comp-emoji">🦄</span>
+        <h3>Neon Unicorn</h3>
+        <span class="comp-rarity legendary">Legendary Tier</span>
+        <p>Buyable with 500 Arena Coins. Show off legendary status on the global map.</p>
+      </div>
+      <div class="companion-card">
+        <span class="comp-emoji">🧙</span>
+        <h3>Mystic Mage</h3>
+        <span class="comp-rarity free">Milestone Reward</span>
+        <p>Unlocked at the 25KM milestone. Cast paths of glowing light across streets.</p>
       </div>
     </div>
   </section>
@@ -97,35 +146,35 @@
   <section id="how-it-works" class="process-section">
     <div class="section-header">
       <h2>STEP-BY-STEP CONQUEST</h2>
-      <p>How to start clashing and dominating your neighborhood leaderboard.</p>
+      <p>Your journey from a casual runner to a legendary district commander.</p>
     </div>
     <div class="process-timeline">
       <div class="process-step">
         <div class="step-number">1</div>
         <div class="step-content">
-          <h3>Install & Authenticate</h3>
-          <p>Download the standalone APK and sign in securely. Setup your display name, team color, and select your starting runner companion.</p>
+          <h3>Download & Deploy</h3>
+          <p>Download the standalone StrideClash Android APK. Authenticate and configure your runner profile, team color, and select your starter avatar companion.</p>
         </div>
       </div>
       <div class="process-step">
         <div class="step-number">2</div>
         <div class="step-content">
-          <h3>Start Your Cardio</h3>
-          <p>Activate GPS run tracking. StrideClash runs smoothly in the background, plotting your route directly onto the tactical map grid.</p>
+          <h3>Map Out Your District</h3>
+          <p>Initiate active location tracking. Jog, run, or cycle around your district. Watch the map paint your colors as you claim real-world streets.</p>
         </div>
       </div>
       <div class="process-step">
         <div class="step-number">3</div>
         <div class="step-content">
-          <h3>Claim & Clash</h3>
-          <p>Enter unclaimed spaces to paint them your color. Encounter opponent zones to trigger PvP warning alerts and outrun their records.</p>
+          <h3>Invasion & Defense</h3>
+          <p>Run through opponent territories to trigger alerts. If your territory gets invaded, prepare to defend it by outrunning their speed and distance records.</p>
         </div>
       </div>
       <div class="process-step">
         <div class="step-number">4</div>
         <div class="step-content">
-          <h3>Earn & Customize</h3>
-          <p>Cash in your distance for Arena Coins. Purchase cybernetic avatars and climb the global rankings.</p>
+          <h3>Conquer the Leaderboard</h3>
+          <p>Accumulate Arena Coins, unlock premium characters, follow local runners, and claim the rank #1 spot on the global leaderboards.</p>
         </div>
       </div>
     </div>
@@ -135,7 +184,7 @@
   <section id="leaderboard" class="leaderboard-section">
     <div class="section-header">
       <h2>GLOBAL LEADERBOARD</h2>
-      <p>Top players dominating the streets. Fetches in real-time from the StrideClash API.</p>
+      <p>Synchronized directly with the live database. Toggle filters to inspect top runners.</p>
     </div>
     <div class="leaderboard-container">
       <div class="leaderboard-filters">
@@ -166,9 +215,8 @@
             </tr>
           </thead>
           <tbody id="leaderboard-rows">
-            <!-- Dynamically populated by app.js -->
             <tr class="loading-row">
-              <td colspan="6">Loading live leaderboard data...</td>
+              <td colspan="6">Syncing live ranking data...</td>
             </tr>
           </tbody>
         </table>
@@ -180,8 +228,8 @@
   <section id="register" class="register-section">
     <div class="register-container">
       <div class="register-info">
-        <h2>JOIN THE BETA TESTING</h2>
-        <p>Help us test StrideClash and provide feedback to shape the future of gamified fitness. Enter your details to register as a verified beta tester.</p>
+        <h2>JOIN THE BETA CONQUEST</h2>
+        <p>Register as a certified beta tester, try out the latest features, and submit your suggestions directly to the development team to shape the game.</p>
         <div class="register-stats">
           <div class="stat-item">
             <span class="stat-num">500+</span>
@@ -189,7 +237,7 @@
           </div>
           <div class="stat-item">
             <span class="stat-num">12K+</span>
-            <span class="stat-label">Zones Captured</span>
+            <span class="stat-label">Captured Zones</span>
           </div>
         </div>
       </div>
@@ -197,30 +245,30 @@
         <form id="beta-form">
           <div class="form-group">
             <label for="name">Display Name</label>
-            <input type="text" id="name" required placeholder="Enter username">
+            <input type="text" id="name" required placeholder="Choose your codename">
           </div>
           <div class="form-group">
             <label for="email">Email Address</label>
-            <input type="email" id="email" required placeholder="Enter email">
+            <input type="email" id="email" required placeholder="For beta invites">
           </div>
           <div class="form-group">
-            <label for="platform">Testing Platform</label>
+            <label for="platform">Testing Device</label>
             <select id="platform">
-              <option value="android">Android (APK Installation)</option>
+              <option value="android">Android (Direct APK)</option>
               <option value="ios">iOS (TestFlight Beta)</option>
             </select>
           </div>
           <div class="form-group">
-            <label for="feedback">Initial Feedback / Feature Request</label>
-            <textarea id="feedback" placeholder="What features would you love to see in the app?"></textarea>
+            <label for="feedback">Features You'd Like to Request</label>
+            <textarea id="feedback" placeholder="E.g., team battles, audio cues, widget tracking..."></textarea>
           </div>
-          <button type="submit" class="btn btn-primary btn-full">Submit Application</button>
+          <button type="submit" class="btn btn-primary btn-full">Register Application</button>
         </form>
         <div id="form-success" class="form-success hidden">
           <div class="success-icon">✓</div>
-          <h3>Application Submitted!</h3>
-          <p>Thank you for signing up to test StrideClash. We will email your verification details shortly.</p>
-          <button id="reset-form-btn" class="btn btn-secondary">Submit Another Response</button>
+          <h3>Registration Successful!</h3>
+          <p>Welcome to StrideClash. Keep an eye on your inbox for setup instructions and tester credentials.</p>
+          <button id="reset-form-btn" class="btn btn-secondary">Submit Another Registration</button>
         </div>
       </div>
     </div>
@@ -229,7 +277,7 @@
   <!-- Footer -->
   <footer class="footer">
     <div class="footer-container">
-      <p>&copy; 2026 StrideClash Ops. All rights reserved.</p>
+      <p>&copy; 2026 StrideClash. All rights reserved.</p>
       <div class="footer-links">
         <a href="https://expo.dev/accounts/yash0909090/projects/runwars-v2/builds/2033734c-914d-4e77-8995-e257f6be8899">Download APK</a>
         <a href="#features">Privacy Policy</a>
