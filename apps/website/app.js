@@ -2,7 +2,9 @@
    StrideClash JavaScript - Interactive Client-Side App Logic
    ============================================================ */
 
-const BACKEND_URL = 'https://runwars-v2.onrender.com';
+const BACKEND_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
+  ? 'http://localhost:3000' 
+  : 'https://runwars-v2.onrender.com';
 
 // State Management
 let currentActivity = 'all';
