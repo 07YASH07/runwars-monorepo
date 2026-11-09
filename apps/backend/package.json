@@ -7,7 +7,8 @@
     "start": "node dist/server.js",
     "dev": "nodemon --watch src --ext ts --exec ts-node src/server.ts",
     "build": "tsc",
-    "migrate": "ts-node src/db/migrate-db.ts"
+    "migrate": "ts-node src/db/migrate-db.ts",
+    "migrate:local": "ts-node scripts/migrate-local-db.ts"
   },
   "dependencies": {
     "@runwars/shared": "*",

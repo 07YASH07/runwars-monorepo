@@ -53,6 +53,13 @@ pgdata/
 cloudflared.exe
 active-tunnel-url.txt
 
+# Local JSON persistence (contains bcrypt hashes and real user data —
+# migrate it into Postgres with `npm run migrate:local`, never commit it)
+data/
+
+# Release APK binaries (built on demand, large, never committed)
+*.apk
+
 # Log dumps
 logcat*.txt
 lt_*.txt
