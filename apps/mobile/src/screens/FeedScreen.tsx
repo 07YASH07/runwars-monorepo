@@ -20,7 +20,8 @@ import { useAuth } from '@/context/AuthContext';
 import * as ImagePicker from 'expo-image-picker';
 import { socketService } from '@/services/SocketService';
 
-const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.2.2:3000';
+import { apiFetch } from '@/config/api';
+import { uploadPostImage } from '@/services/ImageUploadService';
 
 interface FeedItem {
   id: string;
@@ -42,9 +43,12 @@ interface FeedItem {
 
 interface CommentItem {
   id: string;
-  display_name: string;
-  character_type: string;
-  color: string;
+  user_id?: string;
+  user_name?: string;
+  user_avatar?: string | null;
+  display_name?: string;
+  character_type?: string;
+  color?: string;
   content: string;
   created_at: string;
 }
@@ -96,7 +100,11 @@ export default function FeedScreen() {
 
   const [composerVisible, setComposerVisible] = useState(false);
   const [postContent, setPostContent] = useState('');
-  const [postImage, setPostImage] = useState('');
+  // Local image picked by the user, pre-upload. Preview-only until the
+  // post is submitted; at submit time we upload to Firebase Storage and
+  // send the returned public URL in `imageUrl`.
+  const [postImage, setPostImage] = useState<{ uri: string; mimeType?: string | null; fileSize?: number | null } | null>(null);
+  const [uploadProgress, setUploadProgress] = useState(0); // 0..1
   const [submittingPost, setSubmittingPost] = useState(false);
 
   const pickPostImage = async () => {
@@ -109,11 +117,16 @@ export default function FeedScreen() {
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
       aspect: [4, 3],
-      quality: 0.4,
-      base64: true,
+      quality: 0.7,
     });
-    if (!result.canceled && result.assets && result.assets[0]?.base64) {
-      setPostImage(`data:image/jpeg;base64,${result.assets[0].base64}`);
+    if (!result.canceled && result.assets && result.assets[0]) {
+      const a = result.assets[0];
+      setPostImage({
+        uri: a.uri,
+        mimeType: (a as any).mimeType ?? null,
+        fileSize: (a as any).fileSize ?? null,
+      });
+      setUploadProgress(0);
     }
   };
 
@@ -132,7 +145,7 @@ export default function FeedScreen() {
 
   const fetchFeed = useCallback(async () => {
     try {
-      const res = await fetch(`${API_URL}/api/feed?userId=${user?.uid || ''}`, {
+      const res = await apiFetch(`/api/feed?userId=${user?.uid || ''}`, {
         headers: { 'Bypass-Tunnel-Reminder': 'true' }
       });
       if (!res.ok) throw new Error('Failed to load feed');
@@ -180,7 +193,7 @@ export default function FeedScreen() {
     );
 
     try {
-      const res = await fetch(`${API_URL}/api/posts/${post.id}/like`, {
+      const res = await apiFetch(`/api/posts/${post.id}/like`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId: user.uid }),
@@ -212,7 +225,7 @@ export default function FeedScreen() {
     setLoadingComments(true);
     setNewCommentText('');
     try {
-      const res = await fetch(`${API_URL}/api/posts/${postId}/comments`, {
+      const res = await apiFetch(`/api/posts/${postId}/comments`, {
         headers: { 'Bypass-Tunnel-Reminder': 'true' }
       });
       const data = await res.json();
@@ -228,7 +241,7 @@ export default function FeedScreen() {
     if (!selectedPostId || !newCommentText.trim() || !user) return;
     setSubmittingComment(true);
     try {
-      const res = await fetch(`${API_URL}/api/posts/${selectedPostId}/comments`, {
+      const res = await apiFetch(`/api/posts/${selectedPostId}/comments`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -264,7 +277,7 @@ export default function FeedScreen() {
     setSubmittingFriend(true);
     try {
       const endpoint = isCurrentlyFriend ? '/api/friends/remove' : '/api/friends/add';
-      const res = await fetch(`${API_URL}${endpoint}`, {
+      const res = await apiFetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId: user.uid, friendId: targetUserId })
@@ -284,7 +297,7 @@ export default function FeedScreen() {
     setLoadingProfile(true);
     setProfileData(null);
     try {
-      const res = await fetch(`${API_URL}/api/profile/${targetUserId}`, {
+      const res = await apiFetch(`/api/profile/${targetUserId}`, {
         headers: { 'Bypass-Tunnel-Reminder': 'true' }
       });
       if (res.ok) {
@@ -302,23 +315,46 @@ export default function FeedScreen() {
     if (!postContent.trim() || !user) return;
     setSubmittingPost(true);
     try {
-      const res = await fetch(`${API_URL}/api/posts`, {
+      let remoteImageUrl: string | undefined;
+
+      if (postImage?.uri) {
+        try {
+          setUploadProgress(0.01);
+          const uploaded = await uploadPostImage(
+            { uri: postImage.uri, mimeType: postImage.mimeType, fileSize: postImage.fileSize },
+            {
+              userId: user.uid,
+              kind: 'post',
+              onProgress: (frac) => setUploadProgress(Math.max(0.01, Math.min(0.99, frac))),
+            }
+          );
+          remoteImageUrl = uploaded.url;
+          setUploadProgress(1);
+        } catch (e: any) {
+          Alert.alert('Image upload failed', e?.message || 'Could not upload the image. Try again or post without it.');
+          setUploadProgress(0);
+          return;
+        }
+      }
+
+      const res = await apiFetch('/api/posts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userId: user.uid,
           content: postContent.trim(),
-          imageUrl: postImage.trim() || undefined
-        })
+          imageUrl: remoteImageUrl,
+        }),
       });
 
       if (res.ok) {
         setPostContent('');
-        setPostImage('');
+        setPostImage(null);
+        setUploadProgress(0);
         setComposerVisible(false);
         fetchFeed();
       } else {
-        const err = await res.json();
+        const err = await res.json().catch(() => ({}));
         Alert.alert('Publish Failed', err.error || 'Server error');
       }
     } catch (err) {
@@ -330,6 +366,63 @@ export default function FeedScreen() {
 
   const toggleExpand = (postId: string) => {
     setExpandedPosts(prev => ({ ...prev, [postId]: !prev[postId] }));
+  };
+
+  const deleteOwnPost = (post: FeedItem) => {
+    if (!user?.uid || post.user_id !== user.uid) return;
+    Alert.alert(
+      'Delete post?',
+      'This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const res = await apiFetch(`/api/posts/${post.id}`, { method: 'DELETE' });
+              if (res.ok) {
+                setFeed(prev => prev.filter(p => p.id !== post.id));
+              } else {
+                const err = await res.json().catch(() => ({}));
+                Alert.alert('Delete failed', err.error || 'Server rejected delete.');
+              }
+            } catch {
+              Alert.alert('Network', 'Could not reach server.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const deleteOwnComment = (commentId: string, commentAuthorId: string, postId: string) => {
+    if (!user?.uid || commentAuthorId !== user.uid) return;
+    Alert.alert(
+      'Delete comment?',
+      'This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const res = await apiFetch(`/api/comments/${commentId}`, { method: 'DELETE' });
+              if (res.ok) {
+                setComments(prev => prev.filter(c => c.id !== commentId));
+                setFeed(prev => prev.map(p => p.id === postId ? { ...p, comments_count: Math.max(0, (p.comments_count || 0) - 1) } : p));
+              } else {
+                const err = await res.json().catch(() => ({}));
+                Alert.alert('Delete failed', err.error || 'Server rejected delete.');
+              }
+            } catch {
+              Alert.alert('Network', 'Could not reach server.');
+            }
+          },
+        },
+      ]
+    );
   };
 
   const renderItem = ({ item }: { item: FeedItem }) => {
@@ -377,6 +470,8 @@ export default function FeedScreen() {
       }
     };
 
+    const isOwnPost = user?.uid != null && item.user_id === user.uid;
+
     return (
       <View style={styles.card}>
         <View style={styles.cardHeader}>
@@ -397,6 +492,16 @@ export default function FeedScreen() {
             </View>
             <Text style={styles.timeText}>{timeAgo(item.created_at)}</Text>
           </View>
+          {isOwnPost && (
+            <TouchableOpacity
+              onPress={() => deleteOwnPost(item)}
+              testID={`post-delete-${item.id}`}
+              style={styles.postDeleteBtn}
+              hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}
+            >
+              <Text style={styles.postDeleteText}>⋯</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         <View style={styles.cardBody}>
@@ -504,12 +609,18 @@ export default function FeedScreen() {
 
             <View style={styles.inputGroup}>
               <Text style={styles.inputLabel}>Attach Image (Optional)</Text>
-              {postImage ? (
+              {postImage?.uri ? (
                 <View style={styles.selectedImageContainer}>
-                  <Image source={{ uri: postImage }} style={styles.selectedImagePreview} />
-                  <TouchableOpacity style={styles.clearImageBtn} onPress={() => setPostImage('')}>
+                  <Image source={{ uri: postImage.uri }} style={styles.selectedImagePreview} />
+                  <TouchableOpacity style={styles.clearImageBtn} onPress={() => { setPostImage(null); setUploadProgress(0); }}>
                     <Text style={styles.clearImageText}>✕ Remove Image</Text>
                   </TouchableOpacity>
+                  {submittingPost && uploadProgress > 0 && uploadProgress < 1 && (
+                    <View style={styles.uploadProgressWrap}>
+                      <View style={[styles.uploadProgressBar, { width: `${Math.round(uploadProgress * 100)}%` }]} />
+                      <Text style={styles.uploadProgressLabel}>Uploading {Math.round(uploadProgress * 100)}%</Text>
+                    </View>
+                  )}
                 </View>
               ) : (
                 <TouchableOpacity style={styles.imagePickerBtn} onPress={pickPostImage}>
@@ -558,20 +669,33 @@ export default function FeedScreen() {
               <FlatList
                 data={comments}
                 keyExtractor={(item) => item.id}
-                renderItem={({ item }) => (
-                  <View style={styles.commentRow}>
-                    <View style={[styles.commentAvatar, { borderColor: item.color }]}>
-                      <Text style={styles.commentAvatarEmoji}>
-                        {CHARACTER_EMOJI[item.character_type as CharacterType] || '🏃'}
-                      </Text>
+                renderItem={({ item }) => {
+                  const isOwnComment = !!user?.uid && item.user_id === user.uid;
+                  return (
+                    <View style={styles.commentRow}>
+                      <View style={[styles.commentAvatar, { borderColor: item.color }]}>
+                        <Text style={styles.commentAvatarEmoji}>
+                          {CHARACTER_EMOJI[item.character_type as CharacterType] || '🏃'}
+                        </Text>
+                      </View>
+                      <View style={styles.commentInfo}>
+                        <Text style={styles.commentName}>{item.display_name || item.user_name || 'Runner'}</Text>
+                        <Text style={styles.commentText}>{item.content}</Text>
+                        <Text style={styles.commentTime}>{timeAgo(item.created_at)}</Text>
+                      </View>
+                      {isOwnComment && selectedPostId && (
+                        <TouchableOpacity
+                          onPress={() => deleteOwnComment(item.id, item.user_id!, selectedPostId)}
+                          testID={`comment-delete-${item.id}`}
+                          hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}
+                          style={styles.commentDeleteBtn}
+                        >
+                          <Text style={styles.commentDeleteText}>✕</Text>
+                        </TouchableOpacity>
+                      )}
                     </View>
-                    <View style={styles.commentInfo}>
-                      <Text style={styles.commentName}>{item.display_name}</Text>
-                      <Text style={styles.commentText}>{item.content}</Text>
-                      <Text style={styles.commentTime}>{timeAgo(item.created_at)}</Text>
-                    </View>
-                  </View>
-                )}
+                  );
+                }}
                 contentContainerStyle={styles.commentsList}
               />
             )}
@@ -760,6 +884,13 @@ const styles = StyleSheet.create({
   selectedImagePreview: { width: '100%', height: 120, borderRadius: 8, backgroundColor: '#0D0D1A' },
   clearImageBtn: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 12, backgroundColor: '#FF3B3022' },
   clearImageText: { color: '#FF3B30', fontSize: 11, fontWeight: '800' },
+  uploadProgressWrap: { width: '100%', height: 20, borderRadius: 10, backgroundColor: '#0D0D1A', overflow: 'hidden', position: 'relative', borderWidth: 1, borderColor: '#2A2A4A' },
+  uploadProgressBar: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: '#00BFFF' },
+  uploadProgressLabel: { color: '#FFFFFF', fontSize: 10, fontWeight: '800', textAlign: 'center', lineHeight: 20 },
+  postDeleteBtn: { paddingHorizontal: 8, paddingVertical: 4 },
+  postDeleteText: { color: '#8A8AAB', fontSize: 22, fontWeight: '800' },
+  commentDeleteBtn: { paddingHorizontal: 6, paddingVertical: 4, justifyContent: 'flex-start' },
+  commentDeleteText: { color: '#FF3B30', fontSize: 14, fontWeight: '800' },
   friendBtn: { backgroundColor: '#00BFFF', width: '100%', paddingVertical: 10, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginTop: 16 },
   friendBtnActive: { backgroundColor: '#2A2A4A', borderWidth: 1, borderColor: '#00BFFF' },
   friendBtnText: { color: '#0D0D1A', fontWeight: '900', fontSize: 13 },

@@ -61,6 +61,9 @@ const DATABASE_URL = (typeof flags['db-url'] === 'string' ? (flags['db-url'] as 
 
 const REPORT_PATH = path.resolve(__dirname, '../../../LOCAL_DB_MIGRATION_REPORT.md');
 const BACKUP_DIR = path.join(path.dirname(SOURCE), 'backups');
+const MERGE_MAP_PATH = typeof flags['user-merge'] === 'string'
+  ? (flags['user-merge'] as string)
+  : path.join(__dirname, 'user-merge-map.json');
 
 // ──────────────────────────────────────────────────────────────────────
 // Logging + secret redaction
@@ -97,13 +100,16 @@ interface ReportState {
     columns_missing: { table: string; column: string }[];
   };
   sourceCounts: Record<string, number>;
-  planned: Record<string, { toInsert: number; alreadyMigrated: number; rejected: number }>;
-  executed: Record<string, { inserted: number; skipped: number; rejected: number }>;
+  planned: Record<string, { toInsert: number; alreadyMigrated: number; rejected: number; remapped?: number }>;
+  executed: Record<string, { inserted: number; skipped: number; rejected: number; remapped?: number }>;
+  merge: { mapSize: number; entries: { source: string; target: string }[]; fkRedirects: Record<string, { source: string; target: string; count: number }[]> };
   rejectedRecords: { kind: string; sourceId: string; reason: string }[];
   destinationCountsAfter: Record<string, number> | null;
   success: boolean;
   errorMessage: string | null;
 }
+
+interface PlanStats { toInsert: number; alreadyMigrated: number; rejected: number; remapped?: number; }
 
 const report: ReportState = {
   startedAt: new Date().toISOString(),
@@ -120,6 +126,7 @@ const report: ReportState = {
   destinationCountsAfter: null,
   success: false,
   errorMessage: null,
+  merge: { mapSize: 0, entries: [], fkRedirects: {} },
 };
 
 function writeReport() {
@@ -159,22 +166,41 @@ function writeReport() {
   }
   lines.push('');
 
+  if (report.merge.entries.length) {
+    lines.push('## Merge plan (user account consolidation)');
+    lines.push('| Source id (local JSON) | → | Target id (production) |');
+    lines.push('|---|---|---|');
+    for (const e of report.merge.entries) lines.push(`| \`${e.source}\` | → | \`${e.target}\` |`);
+    lines.push('');
+    if (Object.keys(report.merge.fkRedirects).length) {
+      lines.push('### FK references redirected');
+      lines.push('| Entity | Source user | → | Target user | Rows affected |');
+      lines.push('|---|---|---|---|---:|');
+      for (const [entity, rows] of Object.entries(report.merge.fkRedirects)) {
+        for (const r of rows) lines.push(`| ${entity} | \`${r.source}\` | → | \`${r.target}\` | ${r.count} |`);
+      }
+      lines.push('');
+    }
+    lines.push('Source users listed above are **not inserted** as separate rows. Their FK references are redirected above; the ledger records the mapping so re-runs are idempotent.');
+    lines.push('');
+  }
+
   if (Object.keys(report.planned).length) {
     lines.push('## Plan');
-    lines.push('| Entity | To insert | Already migrated | Rejected |');
-    lines.push('|---|---:|---:|---:|');
+    lines.push('| Entity | To insert | Remapped | Already migrated | Rejected |');
+    lines.push('|---|---:|---:|---:|---:|');
     for (const [k, v] of Object.entries(report.planned)) {
-      lines.push(`| ${k} | ${v.toInsert} | ${v.alreadyMigrated} | ${v.rejected} |`);
+      lines.push(`| ${k} | ${v.toInsert} | ${v.remapped ?? 0} | ${v.alreadyMigrated} | ${v.rejected} |`);
     }
     lines.push('');
   }
 
   if (Object.keys(report.executed).length) {
     lines.push('## Execution');
-    lines.push('| Entity | Inserted | Skipped (ledger) | Rejected |');
-    lines.push('|---|---:|---:|---:|');
+    lines.push('| Entity | Inserted | Remapped | Skipped (ledger) | Rejected |');
+    lines.push('|---|---:|---:|---:|---:|');
     for (const [k, v] of Object.entries(report.executed)) {
-      lines.push(`| ${k} | ${v.inserted} | ${v.skipped} | ${v.rejected} |`);
+      lines.push(`| ${k} | ${v.inserted} | ${v.remapped ?? 0} | ${v.skipped} | ${v.rejected} |`);
     }
     lines.push('');
   }
@@ -378,6 +404,26 @@ async function isMigrated(client: PoolClient, sourceType: string, sourceId: stri
   return r.rowCount != null && r.rowCount > 0;
 }
 
+// Set of user IDs considered "known" for FK validation: everything already in
+// the destination `users` table PLUS every valid user in the source JSON.
+// Populated once in main() after preflight. Checking this set instead of
+// running SELECT per row makes dry-run match --execute behaviour (in --execute
+// the users are inserted inside the same transaction, so a per-row DB check
+// would also succeed — but in dry-run that insert is rolled back, which is
+// why the raw SELECT previously produced false FK rejections).
+const knownUserIds = new Set<string>();
+
+// User account consolidation. Source id -> target production id.
+// Loaded from scripts/user-merge-map.json (or --user-merge=<path>).
+// A source user listed here is NOT inserted; its FK references (runs, posts,
+// territories, followers) are redirected onto the target id. The ledger still
+// records the mapping so re-runs are idempotent.
+let userMergeMap: Record<string, string> = {};
+function resolveUserId(id: string | null | undefined): string | null | undefined {
+  if (id && userMergeMap[id]) return userMergeMap[id];
+  return id;
+}
+
 async function recordLedger(
   client: PoolClient,
   sourceType: string,
@@ -407,9 +453,10 @@ function recordRejected(kind: string, sourceId: string, reason: string) {
 }
 
 async function migrateUsers(client: PoolClient, users: LocalUser[], planOnly: boolean) {
-  const stats = { toInsert: 0, alreadyMigrated: 0, rejected: 0 };
+  const stats: PlanStats = { toInsert: 0, alreadyMigrated: 0, rejected: 0, remapped: 0 };
   let inserted = 0;
   let skipped = 0;
+  let remappedExecuted = 0;
 
   for (const u of users) {
     if (!u.id) {
@@ -422,6 +469,19 @@ async function migrateUsers(client: PoolClient, users: LocalUser[], planOnly: bo
       skipped++;
       continue;
     }
+
+    const mergeTarget = userMergeMap[u.id];
+    if (mergeTarget) {
+      // Consolidation path: do not insert this user. Only record a ledger
+      // entry so re-runs are idempotent. FK references to u.id elsewhere in
+      // the source are rewritten to mergeTarget at their own insert sites.
+      stats.remapped = (stats.remapped || 0) + 1;
+      if (planOnly) continue;
+      await recordLedger(client, 'local_json_user', u.id, 'users', mergeTarget, { ...u, _remappedTo: mergeTarget });
+      remappedExecuted++;
+      continue;
+    }
+
     stats.toInsert++;
     if (planOnly) continue;
 
@@ -456,7 +516,15 @@ async function migrateUsers(client: PoolClient, users: LocalUser[], planOnly: bo
 
   const key = 'users';
   report.planned[key] = stats;
-  if (!planOnly) report.executed[key] = { inserted, skipped, rejected: stats.rejected };
+  if (!planOnly) report.executed[key] = { inserted, skipped, rejected: stats.rejected, remapped: remappedExecuted };
+}
+
+function trackRedirect(entity: string, sourceUserId: string, targetUserId: string) {
+  if (sourceUserId === targetUserId) return;
+  if (!report.merge.fkRedirects[entity]) report.merge.fkRedirects[entity] = [];
+  const existing = report.merge.fkRedirects[entity].find((r) => r.source === sourceUserId && r.target === targetUserId);
+  if (existing) existing.count++;
+  else report.merge.fkRedirects[entity].push({ source: sourceUserId, target: targetUserId, count: 1 });
 }
 
 async function migrateRuns(client: PoolClient, runs: LocalRun[], planOnly: boolean) {
@@ -477,14 +545,18 @@ async function migrateRuns(client: PoolClient, runs: LocalRun[], planOnly: boole
       continue;
     }
 
-    // FK validation — the referenced user must exist (either production or
-    // just-migrated in this transaction).
-    const userExists = await client.query(`SELECT 1 FROM users WHERE id=$1`, [r.user_id]);
-    if (!userExists.rowCount) {
+    // FK validation against the pre-computed known-user set (DB-existing +
+    // source-planned). See definition of knownUserIds above.
+    if (!knownUserIds.has(r.user_id)) {
       stats.rejected++;
       recordRejected('run', sid, `foreign key violation: user_id ${r.user_id} not in users`);
       continue;
     }
+
+    // Apply user-merge map before insert so this row is re-parented onto the
+    // canonical production user.
+    const resolvedUserId = resolveUserId(r.user_id) as string;
+    trackRedirect('runs', r.user_id, resolvedUserId);
 
     stats.toInsert++;
     if (planOnly) continue;
@@ -494,7 +566,7 @@ async function migrateRuns(client: PoolClient, runs: LocalRun[], planOnly: boole
        VALUES ($1, $2::jsonb, $3, $4, COALESCE($5, NOW()))
        RETURNING id`,
       [
-        r.user_id,
+        resolvedUserId,
         JSON.stringify(r.route_points ?? []),
         r.distance_meters ?? 0,
         r.activity_type ?? 'run',
@@ -533,12 +605,14 @@ async function migrateTerritories(client: PoolClient, territories: LocalTerritor
       skipped++;
       continue;
     }
-    const userExists = await client.query(`SELECT 1 FROM users WHERE id=$1`, [ownerId]);
-    if (!userExists.rowCount) {
+    if (!knownUserIds.has(ownerId)) {
       stats.rejected++;
       recordRejected('territory', t.id, `foreign key violation: owner_id ${ownerId} not in users`);
       continue;
     }
+
+    const resolvedOwnerId = resolveUserId(ownerId) as string;
+    trackRedirect('territories', ownerId, resolvedOwnerId);
 
     stats.toInsert++;
     if (planOnly) continue;
@@ -551,7 +625,7 @@ async function migrateTerritories(client: PoolClient, territories: LocalTerritor
        ON CONFLICT (id) DO NOTHING`,
       [
         t.id,
-        ownerId,
+        resolvedOwnerId,
         JSON.stringify(t.polygonCoordinates ?? []),
         t.areaSquareMeters ?? 0,
         t.color ?? null,
@@ -600,13 +674,15 @@ async function migratePosts(client: PoolClient, posts: LocalPost[], planOnly: bo
       continue;
     }
 
-    // FK check: created_by/user_id must exist in users
-    const userExists = await client.query(`SELECT 1 FROM users WHERE id=$1`, [p.user_id]);
-    if (!userExists.rowCount) {
+    // FK check: created_by/user_id must exist (DB or source) — uses knownUserIds.
+    if (!knownUserIds.has(p.user_id)) {
       stats.rejected++;
       recordRejected(isAnnouncement ? 'announcement' : 'post', p.id, `FK violation: user_id ${p.user_id} not in users`);
       continue;
     }
+
+    const resolvedPostUserId = resolveUserId(p.user_id) as string;
+    trackRedirect(isAnnouncement ? 'announcements' : 'posts', p.user_id, resolvedPostUserId);
 
     stats.toInsert++;
     if (planOnly) continue;
@@ -616,7 +692,7 @@ async function migratePosts(client: PoolClient, posts: LocalPost[], planOnly: bo
         `INSERT INTO announcements (title, body, created_by, created_at)
          VALUES ($1, $2, $3, COALESCE($4, NOW()))
          RETURNING id`,
-        [p.title, p.content, p.user_id, p.created_at ?? null]
+        [p.title, p.content, resolvedPostUserId, p.created_at ?? null]
       );
       annInserted++;
       await recordLedger(client, sourceType, p.id, 'announcements', String(res.rows[0].id), p);
@@ -625,7 +701,7 @@ async function migratePosts(client: PoolClient, posts: LocalPost[], planOnly: bo
         `INSERT INTO posts (user_id, content, image_url, post_type, related_id, created_at)
          VALUES ($1, $2, $3, $4, $5, COALESCE($6, NOW()))
          RETURNING id`,
-        [p.user_id, p.content, p.image_url ?? null, p.post_type ?? 'user', p.related_id ?? null, p.created_at ?? null]
+        [resolvedPostUserId, p.content, p.image_url ?? null, p.post_type ?? 'user', p.related_id ?? null, p.created_at ?? null]
       );
       postInserted++;
       await recordLedger(client, sourceType, p.id, 'posts', String(res.rows[0].id), p);
@@ -657,15 +733,22 @@ async function migrateFollowers(client: PoolClient, followers: LocalFollower[], 
       skipped++;
       continue;
     }
-    const bothExist = await client.query(
-      `SELECT (SELECT 1 FROM users WHERE id=$1) AS a, (SELECT 1 FROM users WHERE id=$2) AS b`,
-      [f.follower_id, f.following_id]
-    );
-    if (!bothExist.rows[0].a || !bothExist.rows[0].b) {
+    if (!knownUserIds.has(f.follower_id) || !knownUserIds.has(f.following_id)) {
       stats.rejected++;
       recordRejected('follower', key, 'FK violation on follower or following');
       continue;
     }
+
+    const rFollower = resolveUserId(f.follower_id) as string;
+    const rFollowing = resolveUserId(f.following_id) as string;
+    if (rFollower === rFollowing) {
+      stats.rejected++;
+      recordRejected('follower', key, `merge collapsed self-follow after remap (${f.follower_id}->${f.following_id} both map to ${rFollower})`);
+      continue;
+    }
+    trackRedirect('followers', f.follower_id, rFollower);
+    trackRedirect('followers', f.following_id, rFollowing);
+
     stats.toInsert++;
     if (planOnly) continue;
 
@@ -673,7 +756,7 @@ async function migrateFollowers(client: PoolClient, followers: LocalFollower[], 
       `INSERT INTO followers (follower_id, following_id)
        VALUES ($1, $2)
        ON CONFLICT (follower_id, following_id) DO NOTHING`,
-      [f.follower_id, f.following_id]
+      [rFollower, rFollowing]
     );
     inserted++;
     await recordLedger(client, 'local_json_follower', key, 'followers', key, f);
@@ -734,6 +817,26 @@ async function main() {
   };
   log(`[source] counts: ${JSON.stringify(report.sourceCounts)}`);
 
+  // Load optional user-merge map
+  if (fs.existsSync(MERGE_MAP_PATH)) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(MERGE_MAP_PATH, 'utf8'));
+      // Allow either a flat {src: dst} object or a wrapper {map: {src: dst}, ...}
+      userMergeMap = (raw && typeof raw === 'object' && raw.map && typeof raw.map === 'object') ? raw.map : raw;
+      // Strip metadata keys
+      for (const k of Object.keys(userMergeMap)) {
+        if (k.startsWith('_') || typeof userMergeMap[k] !== 'string') delete userMergeMap[k];
+      }
+      log(`[merge] loaded ${Object.keys(userMergeMap).length} user-merge entries from ${MERGE_MAP_PATH}`);
+    } catch (e: any) {
+      throw new Error(`failed to parse user-merge map at ${MERGE_MAP_PATH}: ${e.message}`);
+    }
+  } else {
+    log(`[merge] no user-merge map at ${MERGE_MAP_PATH} — treating as empty`);
+  }
+  report.merge.mapSize = Object.keys(userMergeMap).length;
+  report.merge.entries = Object.entries(userMergeMap).map(([source, target]) => ({ source, target }));
+
   // DB connect
   const requiresSsl = !/localhost|127\.0\.0\.1/.test(DATABASE_URL);
   const pool = new Pool({
@@ -757,6 +860,28 @@ async function main() {
   try {
     await preflight(client);
     await ensureLedger(client);
+
+    // Pre-compute the set of valid user IDs for FK validation: every id
+    // currently in public.users PLUS every id in the source JSON's users
+    // array. In --execute, inserts happen within the transaction so a
+    // per-row DB SELECT would also work; in --dry-run the rollback means
+    // source-planned users don't exist in the DB, so this set is what
+    // keeps dry-run and execute reports in agreement.
+    const dbUsers = await client.query<{ id: string }>('SELECT id FROM users');
+    const dbIds = new Set<string>(dbUsers.rows.map((r) => r.id));
+    dbIds.forEach((id) => knownUserIds.add(id));
+    (parsed.users ?? []).forEach((u) => { if (u.id) knownUserIds.add(u.id); });
+    log(`[preflight] knownUserIds size = ${knownUserIds.size} (${dbUsers.rowCount} in db + ${parsed.users?.length ?? 0} in source JSON, dedup'd)`);
+
+    // Validate the user-merge map: every source must be in the local JSON,
+    // every target must already exist in production users. Fail loudly.
+    const srcIds = new Set<string>((parsed.users ?? []).map((u) => u.id).filter((id): id is string => Boolean(id)));
+    for (const [src, dst] of Object.entries(userMergeMap)) {
+      if (!srcIds.has(src)) throw new Error(`user-merge map: source '${src}' not found in local JSON users`);
+      if (!dbIds.has(dst)) throw new Error(`user-merge map: target '${dst}' not found in production users`);
+      if (userMergeMap[dst]) throw new Error(`user-merge map: chained mapping detected — target '${dst}' is also a source`);
+    }
+    if (Object.keys(userMergeMap).length) log(`[merge] validated ${Object.keys(userMergeMap).length} user-merge entries`);
 
     // Dry run first — always — to populate `report.planned`.
     await client.query('BEGIN');

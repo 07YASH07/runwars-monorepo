@@ -23,14 +23,20 @@ TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
   }
   if (data) {
     const { locations } = data as { locations: any[] };
-    const newPoints: GeoPoint[] = locations.map((loc: any) => ({
+    // Filter out low-accuracy background fixes (> 50 m)
+    const accurateLocations = locations.filter(
+      (loc: any) => loc.coords.accuracy === null || loc.coords.accuracy <= 50
+    );
+    if (accurateLocations.length === 0) return;
+
+    const newPoints: GeoPoint[] = accurateLocations.map((loc: any) => ({
       latitude: loc.coords.latitude,
       longitude: loc.coords.longitude,
       timestamp: loc.timestamp || Date.now(),
     }));
 
-    const speedKmh = locations[0]?.coords?.speed && locations[0].coords.speed > 0
-      ? locations[0].coords.speed * 3.6
+    const speedKmh = accurateLocations[0]?.coords?.speed && accurateLocations[0].coords.speed > 0
+      ? accurateLocations[0].coords.speed * 3.6
       : 0;
 
     backgroundPoints.push(...newPoints);

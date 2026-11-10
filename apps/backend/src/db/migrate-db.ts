@@ -14,7 +14,12 @@ if (!connectionString) {
 }
 
 console.log('🔗 Connecting to database...');
-const pool = new Pool({ connectionString });
+const requiresSsl = !/localhost|127\.0\.0\.1/.test(connectionString);
+const pool = new Pool({
+  connectionString,
+  ssl: requiresSsl ? { rejectUnauthorized: false } : undefined,
+  connectionTimeoutMillis: 10000,
+});
 
 async function migrate() {
   const client = await pool.connect();

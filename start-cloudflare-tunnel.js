@@ -38,6 +38,34 @@ function updateMobileEnv(url) {
   }
 }
 
+function updateQrCode(url) {
+  try {
+    const qrPath = path.join(__dirname, 'qrcode.html');
+    if (fs.existsSync(qrPath)) {
+      let content = fs.readFileSync(qrPath, 'utf8');
+      content = content.replace(/var PUBLIC_APK_URL = ".*";/, `var PUBLIC_APK_URL = "${url}/download/strideclash.apk";`);
+      fs.writeFileSync(qrPath, content, 'utf8');
+      log(`Updated qrcode.html with URL: ${url}`);
+    }
+  } catch (err) {
+    log(`Error updating qrcode.html: ${err.message}`);
+  }
+}
+
+function updateApiConfig(url) {
+  try {
+    const apiPath = path.join(__dirname, 'apps', 'mobile', 'src', 'config', 'api.ts');
+    if (fs.existsSync(apiPath)) {
+      let content = fs.readFileSync(apiPath, 'utf8');
+      content = content.replace(/process\.env\.EXPO_PUBLIC_BACKEND_URL \|\| '.*'/, `process.env.EXPO_PUBLIC_BACKEND_URL || '${url}'`);
+      fs.writeFileSync(apiPath, content, 'utf8');
+      log(`Updated apps/mobile/src/config/api.ts with URL: ${url}`);
+    }
+  } catch (err) {
+    log(`Error updating api.ts: ${err.message}`);
+  }
+}
+
 function startTunnel() {
   log('Starting Cloudflare Quick Tunnel...');
   
@@ -67,6 +95,8 @@ function startTunnel() {
       
       // Update mobile .env
       updateMobileEnv(currentUrl);
+      updateQrCode(currentUrl);
+      updateApiConfig(currentUrl);
       
       // Start ping heartbeat
       startHeartbeat(currentUrl);
@@ -90,20 +120,26 @@ function startTunnel() {
 }
 
 function startHeartbeat(url) {
+  let consecutiveFailures = 0;
   pingIntervalId = setInterval(async () => {
     try {
       const res = await fetch(`${url}/health`, {
         headers: { 'Bypass-Tunnel-Reminder': 'true' },
-        signal: AbortSignal.timeout(5000)
+        signal: AbortSignal.timeout(6000)
       });
       if (!res.ok) {
         throw new Error(`HTTP status ${res.status}`);
       }
+      consecutiveFailures = 0;
     } catch (err) {
-      log(`Self-healing alert: Heartbeat to ${url} failed: ${err.message}. Restarting tunnel...`);
-      cleanup();
-      if (cloudflaredProc) {
-        cloudflaredProc.kill();
+      consecutiveFailures++;
+      log(`Warning: Heartbeat attempt ${consecutiveFailures}/3 failed: ${err.message}`);
+      if (consecutiveFailures >= 3) {
+        log(`Self-healing alert: 3 consecutive heartbeats to ${url} failed. Restarting tunnel...`);
+        cleanup();
+        if (cloudflaredProc) {
+          cloudflaredProc.kill();
+        }
       }
     }
   }, 30000);

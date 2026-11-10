@@ -6,37 +6,48 @@ import {
   RunStopPayload,
   TerritoryClaimPayload,
 } from '@runwars/shared';
-
-// Uses local network IP from env, or falls back to localhost (for emulator)
-const SOCKET_URL = process.env.EXPO_PUBLIC_SOCKET_URL || 'http://10.0.2.2:3000';
+import { CANDIDATE_API_URLS } from '@/config/api';
 
 class SocketService {
   public socket: Socket | null = null;
   public userId: string | null = null;
-  private connectionPromise: Promise<void> | null = null;
+  private currentUrlIndex = 0;
+  private lastJoinPayload: PlayerJoinPayload | null = null;
 
   connect(userId: string, displayName: string, characterType: string, color: string) {
     this.userId = userId;
+    this.lastJoinPayload = {
+      userId,
+      displayName,
+      characterType: characterType as any,
+      color,
+    };
     if (this.socket?.connected) return;
 
-    this.socket = io(SOCKET_URL, {
+    this.attemptConnect();
+  }
+
+  private attemptConnect() {
+    if (this.socket) {
+      try { this.socket.disconnect(); } catch (e) {}
+    }
+
+    const targetUrl = CANDIDATE_API_URLS[this.currentUrlIndex % CANDIDATE_API_URLS.length];
+    console.log(`[Socket] Connecting to ${targetUrl}...`);
+
+    this.socket = io(targetUrl, {
       transports: ['websocket'],
+      timeout: 6000,
       extraHeaders: {
         'Bypass-Tunnel-Reminder': 'true'
       }
     });
 
     this.socket.on('connect', () => {
-      console.log('[Socket] Connected to backend');
-      
-      // Emit player join
-      const payload: PlayerJoinPayload = {
-        userId,
-        displayName,
-        characterType: characterType as any,
-        color,
-      };
-      this.socket?.emit('playerJoin', payload);
+      console.log(`[Socket] Connected to backend at ${targetUrl}`);
+      if (this.lastJoinPayload) {
+        this.socket?.emit('playerJoin', this.lastJoinPayload);
+      }
     });
 
     this.socket.on('disconnect', () => {
@@ -44,7 +55,16 @@ class SocketService {
     });
 
     this.socket.on('connect_error', (err) => {
-      console.error('[Socket] Connection error:', err.message);
+      console.warn(`[Socket] Error on ${targetUrl}:`, err.message);
+      // Try next candidate url after 3 seconds
+      if (CANDIDATE_API_URLS.length > 1) {
+        this.currentUrlIndex++;
+        setTimeout(() => {
+          if (!this.socket?.connected) {
+            this.attemptConnect();
+          }
+        }, 3000);
+      }
     });
   }
 

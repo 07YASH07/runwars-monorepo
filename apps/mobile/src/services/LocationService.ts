@@ -14,7 +14,7 @@ import type { GeoPoint } from '@runwars/shared';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type LocationUpdateCallback = (point: GeoPoint, speedKmh: number) => void;
+type LocationUpdateCallback = (point: GeoPoint, speedKmh: number, accuracyMeters?: number) => void;
 type PermissionStatus = 'granted' | 'denied' | 'unavailable';
 
 // ─── Module State ─────────────────────────────────────────────────────────────
@@ -67,7 +67,7 @@ export async function requestLocationPermissions(): Promise<PermissionStatus> {
  * @throws if location services are unavailable or already tracking
  */
 export async function startTracking(
-  onUpdate: LocationUpdateCallback
+  onUpdate: LocationUpdateCallback,
 ): Promise<void> {
   if (watchSubscription) {
     console.warn('[LocationService] Already tracking — stop first');
@@ -83,22 +83,50 @@ export async function startTracking(
       );
     }
 
+    let lastAcceptedPoint: GeoPoint | null = null;
+
     watchSubscription = await Location.watchPositionAsync(
       {
         accuracy: Location.Accuracy.BestForNavigation,
-        timeInterval: 2000,       // minimum ms between updates
-        distanceInterval: 5,      // minimum meters between updates
+        timeInterval: 2000,
+        distanceInterval: 5,
       },
       (location) => {
+        // Reject poor-accuracy fixes (> 50m uncertainty)
+        if (location.coords.accuracy !== null && location.coords.accuracy > 50) {
+          onUpdate(
+            {
+              latitude: location.coords.latitude,
+              longitude: location.coords.longitude,
+              timestamp: location.timestamp,
+              accuracy: location.coords.accuracy,
+              isLowAccuracy: true,
+            } as any,
+            0
+          );
+          return;
+        }
+
         const point: GeoPoint = {
           latitude: location.coords.latitude,
           longitude: location.coords.longitude,
           timestamp: location.timestamp,
         };
-        const speedKmh = (location.coords.speed && location.coords.speed > 0)
+
+        // Reject GPS jumps larger than 200 m in a single update
+        if (lastAcceptedPoint) {
+          const jumpMeters = haversineDistance(lastAcceptedPoint, point);
+          if (jumpMeters > 200) {
+            console.warn(`[LocationService] GPS jump rejected: ${jumpMeters.toFixed(0)}m`);
+            return;
+          }
+        }
+        lastAcceptedPoint = point;
+
+        const speedKmh = (location.coords.speed !== null && location.coords.speed > 0)
           ? location.coords.speed * 3.6
           : 0;
-        onUpdate(point, speedKmh);
+        onUpdate(point, speedKmh, location.coords.accuracy ?? undefined);
       }
     );
 

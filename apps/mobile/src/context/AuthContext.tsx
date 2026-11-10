@@ -4,12 +4,15 @@ import * as SecureStore from 'expo-secure-store';
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
+import { GoogleAuthProvider, signInWithCredential } from 'firebase/auth';
+import { auth } from '@/config/firebase';
 import type { CharacterType } from '@runwars/shared';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface AuthUser {
   uid: string;
+  selectedAvatar?: string;
   email: string | null;
   displayName: string | null;
   photoURL: string | null;
@@ -22,15 +25,20 @@ interface AuthContextValue {
   user: AuthUser | null;
   isLoading: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string, displayName: string, characterType: string, color: string) => Promise<void>;
+  register: (email: string, password: string, displayName: string, characterType?: string, color?: string) => Promise<void>;
   logout: () => Promise<void>;
+  signIn: (email: string, password: string) => Promise<void>;
+  signUp: (email: string, password: string, displayName: string, characterType?: string, color?: string) => Promise<void>;
+  signOut: () => Promise<void>;
+  signInWithGoogle: (idToken: string) => Promise<void>;
   setCharacterAndColor: (character: CharacterType, color: string) => Promise<void>;
 }
+
+import { apiFetch } from '@/config/api';
 
 // ─── Context ──────────────────────────────────────────────────────────────────
 
 const AuthContext = createContext<AuthContextValue | null>(null);
-const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.2.2:3000';
 
 // ─── Provider ─────────────────────────────────────────────────────────────────
 
@@ -50,9 +58,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           
           // Fetch latest profile
           try {
-            const profileRes = await fetch(`${API_URL}/api/profile/${parsedUser.uid}`, {
-              headers: { 'Bypass-Tunnel-Reminder': 'true' }
-            });
+            const profileRes = await apiFetch(`/api/profile/${parsedUser.uid}`);
             if (profileRes.ok) {
               const profileData = await profileRes.json();
               setUser({
@@ -107,7 +113,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           });
           const token = tokenData.data;
           
-          await fetch(`${API_URL}/api/users/push-token`, {
+          await apiFetch('/api/users/push-token', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ userId: user.uid, token })
@@ -123,7 +129,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(async (email: string, password: string): Promise<void> => {
     setIsLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/auth/login`, {
+      const res = await apiFetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password })
@@ -149,10 +155,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const register = useCallback(async (email: string, password: string, displayName: string, characterType: string, color: string): Promise<void> => {
+  const register = useCallback(async (email: string, password: string, displayName: string, characterType: string = 'scout', color: string = '#00BFFF'): Promise<void> => {
     setIsLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/auth/register`, {
+      const res = await apiFetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password, displayName, characterType, color })
@@ -189,6 +195,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const signInWithGoogle = useCallback(async (idToken: string): Promise<void> => {
+    try {
+      const credential = GoogleAuthProvider.credential(idToken);
+      const cred = await signInWithCredential(auth, credential);
+      const fbUser = cred.user;
+      const loggedUser: AuthUser = {
+        uid: fbUser.uid,
+        email: fbUser.email,
+        displayName: fbUser.displayName,
+        characterType: 'scout',
+        color: '#00BFFF',
+        photoURL: fbUser.photoURL,
+        token: await fbUser.getIdToken(),
+      };
+      await AsyncStorage.setItem('@runwars:user', JSON.stringify(loggedUser));
+      setUser(loggedUser);
+    } catch (error) {
+      console.error('[AuthContext] Google sign-in failed:', error);
+      throw error;
+    }
+  }, []);
+
   const setCharacterAndColor = useCallback(async (character: CharacterType, color: string): Promise<void> => {
     setUser(prev => {
       if (!prev) return null;
@@ -198,8 +226,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const signIn = login;
+  const signOut = logout;
+  const signUp = register;
+
   return (
-    <AuthContext.Provider value={{ user, isLoading, login, register, logout, setCharacterAndColor }}>
+    <AuthContext.Provider value={{
+      user,
+      isLoading,
+      login,
+      register,
+      logout,
+      signIn,
+      signUp,
+      signOut,
+      signInWithGoogle,
+      setCharacterAndColor
+    }}>
       {children}
     </AuthContext.Provider>
   );

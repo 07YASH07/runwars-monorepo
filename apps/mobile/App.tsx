@@ -1,47 +1,49 @@
 /**
- * RunWars Mobile App — Root Entry Point
- * Configured with Cloudflare quick tunnel - profile image fix.
+ * StrideClash Mobile App — Root Entry Point
+ *
+ * 5-Tab Hierarchy (recovery plan 2026-11-10):
+ *   MAP | COMPETE | RUN | COMMUNITY | PROFILE
+ *
+ *   COMPETE   → nested stack: Battles + Rankings
+ *   COMMUNITY → nested stack: Feed + Players (from pre-rebrand CommunityScreen)
  *
  * Wraps the app in:
- * - AuthProvider (Firebase auth state)
+ * - SafeAreaProvider
+ * - AuthProvider (Multi-endpoint fallback + resilient session cache)
  * - NavigationContainer (React Navigation)
- *
- * Navigation logic:
- * - If not authenticated → AuthStack (Login/Register/CharacterSelect)
- * - If authenticated → MainTabs (Map/Leaderboard/Profile)
  */
 import React from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { StatusBar } from 'expo-status-bar';
-import { View, Text, ActivityIndicator, StyleSheet, useColorScheme } from 'react-native';
+import { View, Text, ActivityIndicator, StyleSheet, Platform } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as SplashScreen from 'expo-splash-screen';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
 import { AuthProvider, useAuth } from '@/context/AuthContext';
-import type { RootStackParamList, AuthStackParamList, MainTabParamList } from '@/navigation/types';
+import type {
+  RootStackParamList,
+  AuthStackParamList,
+  MainTabParamList,
+} from '@/navigation/types';
 import { CHARACTER_EMOJI } from '@runwars/shared';
-import type { PostRunParams } from '@/screens/PostRunScreen';
+import { COLORS, RADII, SHADOWS } from '@/theme/tokens';
 
-// ─── Auth Screens ─────────────────────────────────────────────────────────────
+// ─── Screens ──────────────────────────────────────────────────────────────────
 import AuthScreen from '@/screens/AuthScreen';
-
-// ─── Main Screens ─────────────────────────────────────────────────────────────
-import FeedScreen from '@/screens/FeedScreen';
-import CommunityScreen from '@/screens/CommunityScreen';
+import MapDashboardScreen from '@/screens/MapDashboardScreen';
 import RunScreen from '@/screens/RunScreen';
-import LeaderboardScreen from '@/screens/LeaderboardScreen';
 import ProfileScreen from '@/screens/ProfileScreen';
 import PostRunScreen from '@/screens/PostRunScreen';
-
-// ─── Extended Root Params (includes modal) ────────────────────────────────────
-type ExtendedRootStack = RootStackParamList & { PostRun: PostRunParams };
+import CompeteHubScreen from '@/screens/CompeteHubScreen';
+import CommunityHubScreen from '@/screens/CommunityHubScreen';
+import FollowersListScreen from '@/screens/FollowersListScreen';
 
 // ─── Navigators ───────────────────────────────────────────────────────────────
-const RootStack = createNativeStackNavigator<ExtendedRootStack>();
+const RootStack = createNativeStackNavigator<RootStackParamList>();
 const AuthStack = createNativeStackNavigator<AuthStackParamList>();
 const MainTab = createBottomTabNavigator<MainTabParamList>();
 
@@ -55,96 +57,113 @@ function AuthNavigator() {
 
 function MainNavigator() {
   const { user } = useAuth();
-  const colorScheme = useColorScheme();
-  const isDark = colorScheme === 'dark';
 
   return (
     <MainTab.Navigator
+      initialRouteName="MAP"
       screenOptions={{
         headerShown: false,
         tabBarStyle: {
-          backgroundColor: isDark ? '#16162A' : '#FFFFFF',
-          borderTopColor: isDark ? '#2A2A4A' : '#E0E0E0',
-          borderTopWidth: 1.5,
-          height: 84,
-          paddingBottom: 22,
-          paddingTop: 10,
+          backgroundColor: 'rgba(10, 10, 20, 0.96)',
+          borderTopColor: 'rgba(255, 255, 255, 0.1)',
+          borderTopWidth: 1.2,
+          height: Platform.OS === 'ios' ? 88 : 74,
+          paddingBottom: Platform.OS === 'ios' ? 24 : 12,
+          paddingTop: 8,
+          position: 'absolute',
+          elevation: 16,
+          shadowColor: '#000000',
+          shadowOffset: { width: 0, height: -4 },
+          shadowOpacity: 0.6,
+          shadowRadius: 12,
         },
-        tabBarActiveTintColor: isDark ? '#00BFFF' : '#007BFF',
-        tabBarInactiveTintColor: isDark ? '#8A8A8A' : '#8A8A8A',
+        tabBarActiveTintColor: COLORS.neonGreen,
+        tabBarInactiveTintColor: COLORS.textMuted,
         tabBarLabelStyle: {
-          fontSize: 10,
+          fontSize: 9,
           fontWeight: '900',
           letterSpacing: 0.8,
+          marginTop: 2,
         },
       }}
     >
+      {/* 1. MAP — Tactical Conquest Dashboard */}
       <MainTab.Screen
-        name="Feed"
-        component={FeedScreen}
+        name="MAP"
+        component={MapDashboardScreen}
         options={{
-          tabBarLabel: 'FEED',
-          tabBarIcon: ({ color, size }) => (
-            <Text style={{ fontSize: size - 2, color }}>📋</Text>
-          ),
-        }}
-      />
-      <MainTab.Screen
-        name="Community"
-        component={CommunityScreen}
-        options={{
-          tabBarLabel: 'COMMUNITY',
-          tabBarIcon: ({ color, size }) => (
-            <Text style={{ fontSize: size - 2, color }}>👥</Text>
-          ),
-        }}
-      />
-      <MainTab.Screen
-        name="Activity"
-        component={RunScreen}
-        options={{
-          tabBarLabel: 'ACTIVITY',
-          tabBarIcon: ({ color, size }) => (
-            <View style={{
-              backgroundColor: '#00BFFF',
-              width: size + 20,
-              height: size + 20,
-              borderRadius: (size + 20) / 2,
-              justifyContent: 'center',
-              alignItems: 'center',
-              marginBottom: 5,
-              shadowColor: '#00BFFF',
-              shadowOffset: { width: 0, height: 4 },
-              shadowOpacity: 0.4,
-              shadowRadius: 8,
-              elevation: 5
-            }}>
-              <Text style={{ fontSize: size, color: '#FFF' }}>
-                {user?.characterType
-                  ? CHARACTER_EMOJI[user.characterType]
-                  : '🏃'}
-              </Text>
+          tabBarLabel: 'MAP',
+          tabBarIcon: ({ focused }) => (
+            <View style={focused ? styles.activeTabGlow : undefined}>
+              <Text style={{ fontSize: focused ? 22 : 19 }}>🌐</Text>
             </View>
           ),
         }}
       />
+
+      {/* 2. COMPETE — Battles + Rankings */}
       <MainTab.Screen
-        name="Progress"
-        component={LeaderboardScreen}
+        name="COMPETE"
+        component={CompeteHubScreen}
         options={{
-          tabBarLabel: 'PROGRESS',
-          tabBarIcon: ({ color, size }) => (
-            <Text style={{ fontSize: size - 2, color }}>📊</Text>
+          tabBarLabel: 'COMPETE',
+          tabBarIcon: ({ focused }) => (
+            <View style={focused ? styles.activeTabGlow : undefined}>
+              <Text style={{ fontSize: focused ? 22 : 19 }}>⚔️</Text>
+            </View>
           ),
         }}
       />
+
+      {/* 3. RUN — Elevated Center Hero Cockpit */}
       <MainTab.Screen
-        name="Profile"
+        name="RUN"
+        component={RunScreen}
+        options={{
+          tabBarLabel: 'RUN',
+          tabBarIcon: ({ focused }) => (
+            <View
+              style={[
+                styles.centerRunBtn,
+                {
+                  backgroundColor: user?.color || COLORS.neonGreen,
+                  shadowColor: user?.color || COLORS.neonGreen,
+                },
+              ]}
+            >
+              <Text style={styles.centerRunEmoji}>⚡</Text>
+            </View>
+          ),
+        }}
+      />
+
+      {/* 4. COMMUNITY — Feed + Players (restored from pre-rebrand nav) */}
+      <MainTab.Screen
+        name="COMMUNITY"
+        component={CommunityHubScreen}
+        options={{
+          tabBarLabel: 'COMMUNITY',
+          tabBarIcon: ({ focused }) => (
+            <View style={focused ? styles.activeTabGlow : undefined}>
+              <Text style={{ fontSize: focused ? 22 : 19 }}>👥</Text>
+            </View>
+          ),
+        }}
+      />
+
+      {/* 5. PROFILE — RPG Character & Shop */}
+      <MainTab.Screen
+        name="PROFILE"
         component={ProfileScreen}
         options={{
           tabBarLabel: 'PROFILE',
-          tabBarIcon: ({ color, size }) => (
-            <Text style={{ fontSize: size - 2, color }}>👤</Text>
+          tabBarIcon: ({ focused }) => (
+            <View style={focused ? styles.activeTabGlow : undefined}>
+              <Text style={{ fontSize: focused ? 22 : 19 }}>
+                {user?.selectedAvatar ||
+                  (user?.characterType ? (CHARACTER_EMOJI as any)[user.characterType] : '👤')}
+              </Text>
+            </View>
           ),
         }}
       />
@@ -165,10 +184,11 @@ function RootRouter() {
 
   if (isLoading) {
     return (
-      <View style={loadingStyles.container}>
-        <Text style={loadingStyles.logo}>🏃</Text>
-        <Text style={loadingStyles.title}>StrideClash</Text>
-        <ActivityIndicator color="#00BFFF" style={{ marginTop: 24 }} />
+      <View style={styles.loadingContainer}>
+        <Text style={styles.loadingLogo}>⚡</Text>
+        <Text style={styles.loadingTitle}>STRIDECLASH</Text>
+        <Text style={styles.loadingSub}>INITIALIZING TACTICAL SATELLITE...</Text>
+        <ActivityIndicator color={COLORS.neonGreen} style={{ marginTop: 24 }} size="large" />
       </View>
     );
   }
@@ -183,6 +203,11 @@ function RootRouter() {
             component={PostRunScreen}
             options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
           />
+          <RootStack.Screen
+            name="FollowersList"
+            component={FollowersListScreen}
+            options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
+          />
         </>
       ) : (
         <RootStack.Screen name="Auth" component={AuthNavigator} />
@@ -194,7 +219,6 @@ function RootRouter() {
 // ─── App Root ─────────────────────────────────────────────────────────────────
 
 export default function App() {
-  console.log('APP COMPONENT IS MOUNTING!');
   return (
     <SafeAreaProvider>
       <AuthProvider>
@@ -202,12 +226,12 @@ export default function App() {
           theme={{
             dark: true,
             colors: {
-              primary: '#00BFFF',
-              background: '#0D0D1A',
-              card: '#16162A',
-              text: '#FFFFFF',
-              border: '#2A2A4A',
-              notification: '#FF4D4D',
+              primary: COLORS.neonGreen,
+              background: COLORS.bgCanvas,
+              card: COLORS.bgSurface,
+              text: COLORS.textPrimary,
+              border: COLORS.borderSubtle,
+              notification: COLORS.crimson,
             },
             fonts: {
               regular: { fontFamily: 'System', fontWeight: '400' },
@@ -227,21 +251,50 @@ export default function App() {
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
-
-
-const loadingStyles = StyleSheet.create({
-  container: {
+const styles = StyleSheet.create({
+  centerRunBtn: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: Platform.OS === 'ios' ? 14 : 18,
+    borderWidth: 2.5,
+    borderColor: '#FFFFFF',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.55,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+  centerRunEmoji: {
+    fontSize: 26,
+    color: '#080811',
+  },
+  activeTabGlow: {
+    transform: [{ scale: 1.15 }],
+  },
+  loadingContainer: {
     flex: 1,
-    backgroundColor: '#0D0D1A',
+    backgroundColor: COLORS.bgCanvas,
     alignItems: 'center',
     justifyContent: 'center',
+    padding: 24,
   },
-  logo: { fontSize: 80 },
-  title: {
-    fontSize: 40,
+  loadingLogo: {
+    fontSize: 64,
+    marginBottom: 8,
+  },
+  loadingTitle: {
+    fontSize: 32,
     fontWeight: '900',
     color: '#FFFFFF',
     letterSpacing: 2,
-    marginTop: 8,
+  },
+  loadingSub: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: COLORS.neonGreen,
+    letterSpacing: 1.5,
+    marginTop: 6,
   },
 });

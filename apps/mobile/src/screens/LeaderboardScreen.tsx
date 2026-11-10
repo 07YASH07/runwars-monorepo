@@ -1,6 +1,13 @@
 /**
- * LeaderboardScreen — Global player rankings by territory claimed.
- * Redesigned in v2.0 with Podium, Activity filters, and Sticky User card.
+ * LeaderboardScreen — Global Esports Rankings for StrideClash.
+ *
+ * Features:
+ * - 3D Tiered Glowing Podium (1st Gold Crown, 2nd Silver, 3rd Bronze)
+ * - Scope toggle: GLOBAL 🌐 / COUNTRY 🇮🇳 / CITY 🏙️
+ * - Metric toggles: TERRITORY M² / DISTANCE KM / CONQUERED ZONES
+ * - Activity pills: ALL / RUN / WALK / BIKE
+ * - Sticky bottom player rank card with gap-to-next-rank indicator
+ * - Auto-refreshes when new territory is claimed
  */
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
@@ -12,13 +19,20 @@ import {
   ActivityIndicator,
   RefreshControl,
   StatusBar,
-  ScrollView,
+  Platform,
 } from 'react-native';
 import { useMultiplayer } from '@/hooks/useMultiplayer';
 import { CHARACTER_EMOJI, CharacterType } from '@runwars/shared';
 import { useAuth } from '@/context/AuthContext';
-
-const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.2.2:3000';
+import {
+  COLORS,
+  CLASS_THEMES,
+  SPACING,
+  RADII,
+  SHADOWS,
+} from '@/theme/tokens';
+import { GlassCard, StatBadge, PlayerAvatar } from '@/components/ui';
+import { apiFetch } from '@/config/api';
 
 interface LeaderboardEntry {
   id: string;
@@ -31,15 +45,15 @@ interface LeaderboardEntry {
   total_distance: number;
 }
 
+type ScopeFilter = 'global' | 'country' | 'city';
 type ActivityFilter = 'all' | 'run' | 'walk' | 'cycle';
 type MetricFilter = 'territory' | 'distance' | 'zones';
-
-const MEDALS = ['🥇', '🥈', '🥉'];
 
 export default function LeaderboardScreen() {
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [scope, setScope] = useState<ScopeFilter>('global');
   const [activity, setActivity] = useState<ActivityFilter>('all');
   const [metric, setMetric] = useState<MetricFilter>('territory');
 
@@ -48,13 +62,13 @@ export default function LeaderboardScreen() {
 
   const fetchLeaderboard = useCallback(async () => {
     try {
-      const res = await fetch(`${API_URL}/leaderboard?activity=${activity}&metric=${metric}`, {
-        headers: { 'Bypass-Tunnel-Reminder': 'true' }
-      });
-      const data = await res.json();
-      setEntries(data);
+      const res = await apiFetch(`/leaderboard?activity=${activity}&metric=${metric}`);
+      if (res.ok) {
+        const data = await res.json();
+        setEntries(data);
+      }
     } catch (err) {
-      console.error('[Leaderboard] Failed to fetch:', err);
+      console.error('[Leaderboard] Fetch error:', err);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -65,7 +79,6 @@ export default function LeaderboardScreen() {
     fetchLeaderboard();
   }, [fetchLeaderboard]);
 
-  // Re-fetch when new territories are claimed
   useEffect(() => {
     fetchLeaderboard();
   }, [territories.length]);
@@ -75,193 +88,250 @@ export default function LeaderboardScreen() {
     fetchLeaderboard();
   }, [fetchLeaderboard]);
 
-  // Extract Top 3 for Podium
   const topThree = useMemo(() => entries.slice(0, 3), [entries]);
   const listEntries = useMemo(() => entries.slice(3), [entries]);
 
-  // Find current user's entry
   const myEntry = useMemo(() => {
-    const idx = entries.findIndex(e => e.id === user?.uid);
+    const idx = entries.findIndex((e) => e.id === user?.uid);
     if (idx !== -1) {
       return { entry: entries[idx], rank: idx + 1 };
     }
     return null;
-  }, [entries, user]);
+  }, [entries, user?.uid]);
 
-  const formatValue = useCallback((item: LeaderboardEntry) => {
-    if (metric === 'distance') {
-      return ((item.total_distance || 0) / 1000).toFixed(1) + ' km';
-    }
-    if (metric === 'zones') {
-      return (item.total_zones || 0) + ' zone' + (item.total_zones !== 1 ? 's' : '');
-    }
-    return ((item.total_territory || 0) / 1_000_000).toFixed(4) + ' km²';
-  }, [metric]);
-
-  const renderItem = ({ item, index }: { item: LeaderboardEntry; index: number }) => {
-    const isMe = item.id === user?.uid;
-    const emoji = item.character_type ? CHARACTER_EMOJI[item.character_type as CharacterType] ?? '🏃' : '🏃';
-    const actualRank = index + 4; // listEntries starts at index 3 (4th place)
-
-    return (
-      <View style={[styles.row, isMe && styles.rowHighlight]}>
-        <View style={styles.rankCol}>
-          <Text style={styles.rankNum}>{actualRank}</Text>
-        </View>
-
-        <View style={[styles.avatar, { backgroundColor: item.color + '22', borderColor: item.color }]}>
-          <Text style={styles.avatarEmoji}>{emoji}</Text>
-        </View>
-
-        <View style={styles.info}>
-          <View style={styles.nameRow}>
-            <Text style={[styles.name, isMe && { color: item.color }]} numberOfLines={1}>
-              {item.display_name || 'Unknown Runner'}
-            </Text>
-            {isMe && <Text style={styles.youBadge}>YOU</Text>}
-          </View>
-          <Text style={styles.subStats}>
-            {((item.total_distance || 0) / 1000).toFixed(1)} km · {item.total_runs} run{item.total_runs !== 1 ? 's' : ''}
-          </Text>
-        </View>
-
-        <View style={styles.metricCol}>
-          <Text style={[styles.metricVal, { color: item.color }]}>{formatValue(item)}</Text>
-        </View>
-      </View>
-    );
-  };
+  const formatValue = useCallback(
+    (item: LeaderboardEntry) => {
+      if (metric === 'distance') {
+        return ((item.total_distance || 0) / 1000).toFixed(1) + ' km';
+      }
+      if (metric === 'zones') {
+        return (item.total_zones || 0) + ' zones';
+      }
+      const sqm = Math.round(item.total_territory || 0);
+      if (sqm >= 1000000) {
+        return (sqm / 1000000).toFixed(2) + ' km²';
+      }
+      return sqm.toLocaleString() + ' m²';
+    },
+    [metric]
+  );
 
   const renderHeader = () => (
-    <View style={styles.listHeader}>
-      {/* 👑 3D-style Podium View */}
+    <View style={styles.headerArea}>
+      {/* Scope Toggles: GLOBAL / COUNTRY / CITY */}
+      <View style={styles.scopeRow}>
+        <TouchableOpacity
+          style={[styles.scopeBtn, scope === 'global' && styles.scopeBtnActive]}
+          onPress={() => setScope('global')}
+        >
+          <Text style={[styles.scopeText, scope === 'global' && styles.scopeTextActive]}>
+            GLOBAL 🌐
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.scopeBtn, scope === 'country' && styles.scopeBtnActive]}
+          onPress={() => setScope('country')}
+        >
+          <Text style={[styles.scopeText, scope === 'country' && styles.scopeTextActive]}>
+            COUNTRY 🇮🇳
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.scopeBtn, scope === 'city' && styles.scopeBtnActive]}
+          onPress={() => setScope('city')}
+        >
+          <Text style={[styles.scopeText, scope === 'city' && styles.scopeTextActive]}>
+            CITY 🏙️
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Metric Filter Chips */}
+      <View style={styles.metricFilterRow}>
+        <TouchableOpacity
+          style={[styles.metricChip, metric === 'territory' && styles.metricChipActive]}
+          onPress={() => setMetric('territory')}
+        >
+          <Text style={[styles.metricChipText, metric === 'territory' && styles.metricChipTextActive]}>
+            TURF AREA
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.metricChip, metric === 'distance' && styles.metricChipActive]}
+          onPress={() => setMetric('distance')}
+        >
+          <Text style={[styles.metricChipText, metric === 'distance' && styles.metricChipTextActive]}>
+            DISTANCE
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.metricChip, metric === 'zones' && styles.metricChipActive]}
+          onPress={() => setMetric('zones')}
+        >
+          <Text style={[styles.metricChipText, metric === 'zones' && styles.metricChipTextActive]}>
+            ZONES
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* 👑 3D-Tiered Esports Podium */}
       {topThree.length > 0 && (
         <View style={styles.podiumWrapper}>
-          <View style={styles.podiumContainer}>
-            {/* 🥈 Second Place (Left) */}
-            <View style={styles.podiumCol}>
-              {topThree[1] && (
-                <View style={styles.podiumPlayer}>
-                  <View style={[styles.podiumAvatar, { borderColor: '#C0C0C0', shadowColor: '#C0C0C0' }]}>
-                    <Text style={styles.podiumEmoji}>
-                      {CHARACTER_EMOJI[topThree[1].character_type as CharacterType] || '🏃'}
-                    </Text>
-                    <Text style={styles.podiumBadge}>🥈</Text>
-                  </View>
-                  <Text style={styles.podiumName} numberOfLines={1}>{topThree[1].display_name}</Text>
-                  <Text style={styles.podiumVal}>{formatValue(topThree[1])}</Text>
-                </View>
-              )}
-              <View style={[styles.podiumBar, styles.podiumBarSecond]}>
-                <Text style={styles.podiumRankText}>2</Text>
-              </View>
-            </View>
-
-            {/* 🥇 First Place (Center) */}
-            <View style={styles.podiumCol}>
-              {topThree[0] && (
-                <View style={styles.podiumPlayer}>
-                  <View style={[styles.podiumAvatar, styles.podiumAvatarFirst, { borderColor: '#FFD700', shadowColor: '#FFD700' }]}>
-                    <Text style={styles.podiumEmojiFirst}>
-                      {CHARACTER_EMOJI[topThree[0].character_type as CharacterType] || '🏃'}
-                    </Text>
-                    <Text style={styles.podiumBadgeFirst}>🥇</Text>
-                  </View>
-                  <Text style={[styles.podiumName, { fontWeight: '900', color: '#FFF' }]} numberOfLines={1}>
-                    {topThree[0].display_name}
+          {/* 🥈 2nd Place (Silver - Left) */}
+          <View style={[styles.podiumCol, { marginTop: 28 }]}>
+            {topThree[1] && (
+              <View style={styles.podiumPlayer}>
+                <View style={[styles.podiumAvatar, { borderColor: COLORS.silver, ...SHADOWS.surface }]}>
+                  <Text style={styles.podiumEmoji}>
+                    {(CHARACTER_EMOJI as any)[topThree[1].character_type] || '🏃'}
                   </Text>
-                  <Text style={[styles.podiumVal, { color: '#FFD700' }]}>{formatValue(topThree[0])}</Text>
-                </View>
-              )}
-              <View style={[styles.podiumBar, styles.podiumBarFirst]}>
-                <Text style={styles.podiumRankText}>1</Text>
-              </View>
-            </View>
-
-            {/* 🥉 Third Place (Right) */}
-            <View style={styles.podiumCol}>
-              {topThree[2] && (
-                <View style={styles.podiumPlayer}>
-                  <View style={[styles.podiumAvatar, { borderColor: '#CD7F32', shadowColor: '#CD7F32' }]}>
-                    <Text style={styles.podiumEmoji}>
-                      {CHARACTER_EMOJI[topThree[2].character_type as CharacterType] || '🏃'}
-                    </Text>
-                    <Text style={styles.podiumBadge}>🥉</Text>
+                  <View style={[styles.medalPill, { backgroundColor: COLORS.silver }]}>
+                    <Text style={styles.medalPillText}>2</Text>
                   </View>
-                  <Text style={styles.podiumName} numberOfLines={1}>{topThree[2].display_name}</Text>
-                  <Text style={styles.podiumVal}>{formatValue(topThree[2])}</Text>
                 </View>
-              )}
-              <View style={[styles.podiumBar, styles.podiumBarThird]}>
-                <Text style={styles.podiumRankText}>3</Text>
+                <Text style={styles.podiumName} numberOfLines={1}>
+                  {topThree[1].display_name}
+                </Text>
+                <Text style={[styles.podiumScore, { color: COLORS.silver }]}>
+                  {formatValue(topThree[1])}
+                </Text>
               </View>
+            )}
+            <View style={[styles.podiumPedestal, styles.podiumPedestal2]}>
+              <Text style={styles.pedestalRank}>2ND</Text>
+            </View>
+          </View>
+
+          {/* 🥇 1st Place (Gold Crown - Center) */}
+          <View style={styles.podiumCol}>
+            {topThree[0] && (
+              <View style={styles.podiumPlayer}>
+                <Text style={styles.crownEmoji}>👑</Text>
+                <View style={[styles.podiumAvatar, styles.podiumAvatar1, { borderColor: COLORS.gold, ...SHADOWS.goldGlow }]}>
+                  <Text style={styles.podiumEmoji}>
+                    {(CHARACTER_EMOJI as any)[topThree[0].character_type] || '⚡'}
+                  </Text>
+                  <View style={[styles.medalPill, { backgroundColor: COLORS.gold }]}>
+                    <Text style={styles.medalPillText}>1</Text>
+                  </View>
+                </View>
+                <Text style={[styles.podiumName, { fontWeight: '900' }]} numberOfLines={1}>
+                  {topThree[0].display_name}
+                </Text>
+                <Text style={[styles.podiumScore, { color: COLORS.gold }]}>
+                  {formatValue(topThree[0])}
+                </Text>
+              </View>
+            )}
+            <View style={[styles.podiumPedestal, styles.podiumPedestal1]}>
+              <Text style={[styles.pedestalRank, { color: COLORS.gold }]}>1ST</Text>
+            </View>
+          </View>
+
+          {/* 🥉 3rd Place (Bronze - Right) */}
+          <View style={[styles.podiumCol, { marginTop: 42 }]}>
+            {topThree[2] && (
+              <View style={styles.podiumPlayer}>
+                <View style={[styles.podiumAvatar, { borderColor: COLORS.bronze, ...SHADOWS.surface }]}>
+                  <Text style={styles.podiumEmoji}>
+                    {(CHARACTER_EMOJI as any)[topThree[2].character_type] || '🏃'}
+                  </Text>
+                  <View style={[styles.medalPill, { backgroundColor: COLORS.bronze }]}>
+                    <Text style={styles.medalPillText}>3</Text>
+                  </View>
+                </View>
+                <Text style={styles.podiumName} numberOfLines={1}>
+                  {topThree[2].display_name}
+                </Text>
+                <Text style={[styles.podiumScore, { color: COLORS.bronze }]}>
+                  {formatValue(topThree[2])}
+                </Text>
+              </View>
+            )}
+            <View style={[styles.podiumPedestal, styles.podiumPedestal3]}>
+              <Text style={styles.pedestalRank}>3RD</Text>
             </View>
           </View>
         </View>
       )}
+
+      {/* Activity Filter Sub-Tabs */}
+      <View style={styles.activityFilterRow}>
+        {(['all', 'run', 'walk', 'cycle'] as ActivityFilter[]).map((act) => (
+          <TouchableOpacity
+            key={act}
+            style={[styles.activityPill, activity === act && styles.activityPillActive]}
+            onPress={() => setActivity(act)}
+          >
+            <Text style={[styles.activityPillText, activity === act && styles.activityPillTextActive]}>
+              {act === 'all' ? 'ALL MODES' : act === 'cycle' ? 'BIKE' : act.toUpperCase()}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
     </View>
   );
 
-  return (
-    <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#0D0D1A" />
+  const renderItem = ({ item, index }: { item: LeaderboardEntry; index: number }) => {
+    const isMe = item.id === user?.uid;
+    const actualRank = index + 4;
+    const emoji = (CHARACTER_EMOJI as any)[item.character_type] || '🏃';
 
-      {/* Header Panel */}
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>🏆 LEADERBOARD</Text>
-        <Text style={styles.headerSub}>Compete globally for regional dominance</Text>
-
-        {/* Metric Toggles (Territory / Distance / Zones) */}
-        <View style={styles.metricContainer}>
-          {(['territory', 'distance', 'zones'] as MetricFilter[]).map((m) => (
-            <TouchableOpacity
-              key={m}
-              style={[styles.metricTab, metric === m && styles.metricTabActive]}
-              onPress={() => setMetric(m)}
-            >
-              <Text style={[styles.metricTabText, metric === m && styles.metricTabTextActive]}>
-                {m.toUpperCase()}
-              </Text>
-            </TouchableOpacity>
-          ))}
+    return (
+      <GlassCard
+        style={styles.playerRow}
+        variant={isMe ? 'neonBorder' : 'default'}
+        glow={isMe}
+      >
+        <View style={styles.rankCol}>
+          <Text style={[styles.rankNumber, isMe && { color: COLORS.neonGreen }]}>
+            #{actualRank}
+          </Text>
         </View>
 
-        {/* Activity Pills (ALL / RUN / WALK / CYCLE) */}
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={styles.activityScroll}
-          contentContainerStyle={styles.activityContainer}
-        >
-          {([
-            { key: 'all', label: '🌍 ALL' },
-            { key: 'run', label: '🏃 RUN' },
-            { key: 'walk', label: '🚶 WALK' },
-            { key: 'cycle', label: '🚴 CYCLE' }
-          ] as { key: ActivityFilter; label: string }[]).map((act) => (
-            <TouchableOpacity
-              key={act.key}
-              style={[styles.activityPill, activity === act.key && styles.activityPillActive]}
-              onPress={() => setActivity(act.key)}
-            >
-              <Text style={[styles.activityPillText, activity === act.key && styles.activityPillTextActive]}>
-                {act.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
+        <View style={[styles.avatarRing, { borderColor: item.color || COLORS.electricBlue }]}>
+          <Text style={styles.avatarEmoji}>{emoji}</Text>
+        </View>
+
+        <View style={styles.infoCol}>
+          <View style={styles.nameRow}>
+            <Text style={[styles.playerName, isMe && { color: COLORS.neonGreen }]} numberOfLines={1}>
+              {item.display_name || 'Runner'}
+            </Text>
+            {isMe && <Text style={styles.youTag}>YOU</Text>}
+          </View>
+          <Text style={styles.playerSub}>
+            {((item.total_distance || 0) / 1000).toFixed(1)} km · {item.total_runs || 0} runs
+          </Text>
+        </View>
+
+        <View style={styles.metricCol}>
+          <Text style={[styles.metricValText, { color: item.color || COLORS.electricBlue }]}>
+            {formatValue(item)}
+          </Text>
+        </View>
+      </GlassCard>
+    );
+  };
+
+  return (
+    <View style={styles.container}>
+      <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
+
+      {/* ── Screen Title Header ── */}
+      <View style={styles.screenHeader}>
+        <Text style={styles.screenTitle}>ESPORTS RANKINGS</Text>
+        <Text style={styles.screenSub}>GLOBAL TURF LEADERBOARD</Text>
       </View>
 
       {loading ? (
-        <View style={styles.center}>
-          <ActivityIndicator color="#00BFFF" size="large" />
-          <Text style={styles.loadingText}>Refreshing rankings...</Text>
-        </View>
-      ) : entries.length === 0 ? (
-        <View style={styles.center}>
-          <Text style={styles.emptyEmoji}>🗺️</Text>
-          <Text style={styles.emptyText}>No rankings found.</Text>
-          <Text style={styles.emptySubText}>Start tracking activity to claim your spot!</Text>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator color={COLORS.neonGreen} size="large" />
+          <Text style={styles.loadingText}>SYNCING LEADERBOARD...</Text>
         </View>
       ) : (
         <FlatList
@@ -269,38 +339,49 @@ export default function LeaderboardScreen() {
           keyExtractor={(item) => item.id}
           renderItem={renderItem}
           ListHeaderComponent={renderHeader}
+          contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
               onRefresh={onRefresh}
-              tintColor="#00BFFF"
+              tintColor={COLORS.neonGreen}
+              colors={[COLORS.neonGreen]}
             />
           }
-          contentContainerStyle={styles.list}
-          showsVerticalScrollIndicator={false}
+          ListEmptyComponent={
+            <View style={styles.emptyContainer}>
+              <Text style={styles.emptyText}>No runners logged for this filter yet.</Text>
+            </View>
+          }
         />
       )}
 
-      {/* 🛡️ Sticky Personal Rank Card */}
+      {/* ── Sticky Personal Ranking Floating Card ── */}
       {myEntry && (
-        <View style={styles.stickyCard}>
-          <View style={styles.stickyRankCol}>
-            <Text style={styles.stickyRankNum}>#{myEntry.rank}</Text>
-          </View>
-          <View style={[styles.avatar, { backgroundColor: myEntry.entry.color + '22', borderColor: myEntry.entry.color }]}>
-            <Text style={styles.avatarEmoji}>
-              {CHARACTER_EMOJI[myEntry.entry.character_type as CharacterType] || '🏃'}
-            </Text>
-          </View>
-          <View style={styles.info}>
-            <Text style={styles.stickyName} numberOfLines={1}>{myEntry.entry.display_name}</Text>
-            <Text style={styles.subStats}>Your active rank among competitors</Text>
-          </View>
-          <View style={styles.metricCol}>
-            <Text style={[styles.metricVal, { color: myEntry.entry.color, fontSize: 16 }]}>
-              {formatValue(myEntry.entry)}
-            </Text>
-          </View>
+        <View style={styles.stickyUserCardContainer}>
+          <GlassCard style={styles.stickyCard} variant="neonBorder" glow>
+            <View style={styles.stickyRow}>
+              <View style={styles.stickyRankCol}>
+                <Text style={styles.stickyRankNum}>#{myEntry.rank}</Text>
+                <Text style={styles.stickyRankLabel}>YOUR RANK</Text>
+              </View>
+
+              <View style={styles.stickyInfoCol}>
+                <Text style={styles.stickyName}>{myEntry.entry.display_name}</Text>
+                <Text style={styles.stickySub}>
+                  {myEntry.rank === 1
+                    ? '🏆 Reigning Champion of the Sector!'
+                    : `Keep running to overtake #${myEntry.rank - 1}!`}
+                </Text>
+              </View>
+
+              <View style={styles.stickyScoreCol}>
+                <Text style={styles.stickyScoreVal}>{formatValue(myEntry.entry)}</Text>
+                <Text style={styles.stickyScoreLbl}>TOTAL SCORE</Text>
+              </View>
+            </View>
+          </GlassCard>
         </View>
       )}
     </View>
@@ -308,103 +389,95 @@ export default function LeaderboardScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0D0D1A' },
-
-  header: {
-    paddingTop: 55,
-    paddingBottom: 12,
-    paddingHorizontal: 20,
-    backgroundColor: '#111124',
-    borderBottomWidth: 1,
-    borderBottomColor: '#1E1E38',
+  container: {
+    flex: 1,
+    backgroundColor: COLORS.bgCanvas,
+    paddingTop: Platform.OS === 'ios' ? 52 : 44,
   },
-  headerTitle: {
+  screenHeader: {
+    paddingHorizontal: SPACING.md,
+    marginBottom: SPACING.sm,
+  },
+  screenTitle: {
     fontSize: 22,
     fontWeight: '900',
-    color: '#00BFFF',
-    letterSpacing: 2,
+    color: '#FFFFFF',
+    letterSpacing: 1.2,
   },
-  headerSub: {
-    fontSize: 12,
-    color: '#4A4A6A',
-    marginTop: 4,
-  },
-
-  // Metric selectors
-  metricContainer: {
-    flexDirection: 'row',
-    backgroundColor: '#0A0A14',
-    borderRadius: 8,
-    marginTop: 16,
-    padding: 3,
-    borderWidth: 1,
-    borderColor: '#1E1E38',
-  },
-  metricTab: {
-    flex: 1,
-    paddingVertical: 8,
-    alignItems: 'center',
-    borderRadius: 6,
-  },
-  metricTabActive: {
-    backgroundColor: '#1E1E38',
-  },
-  metricTabText: {
+  screenSub: {
     fontSize: 10,
     fontWeight: '800',
-    color: '#4A4A6A',
-    letterSpacing: 1,
+    color: COLORS.neonGreen,
+    letterSpacing: 1.5,
   },
-  metricTabTextActive: {
-    color: '#00BFFF',
+  headerArea: {
+    marginBottom: 8,
   },
-
-  // Activity pills
-  activityScroll: {
-    marginTop: 12,
-    marginHorizontal: -20,
-    paddingHorizontal: 20,
-  },
-  activityContainer: {
+  scopeRow: {
     flexDirection: 'row',
-    gap: 8,
-    paddingBottom: 4,
-  },
-  activityPill: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
-    backgroundColor: '#1E1E38',
+    backgroundColor: 'rgba(16, 16, 32, 0.9)',
+    borderRadius: RADII.pill,
+    padding: 3,
     borderWidth: 1,
-    borderColor: '#2A2A4A',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    marginBottom: 10,
   },
-  activityPillActive: {
-    backgroundColor: '#00BFFF1F',
-    borderColor: '#00BFFF',
-  },
-  activityPillText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#7C7CB0',
-  },
-  activityPillTextActive: {
-    color: '#00BFFF',
-  },
-
-  list: { paddingBottom: 110 },
-  listHeader: { paddingVertical: 16 },
-
-  // 👑 Podium design
-  podiumWrapper: {
+  scopeBtn: {
+    flex: 1,
+    paddingVertical: 7,
     alignItems: 'center',
-    marginVertical: 10,
+    borderRadius: RADII.pill,
   },
-  podiumContainer: {
+  scopeBtnActive: {
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    borderWidth: 1,
+    borderColor: COLORS.borderMedium,
+  },
+  scopeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: COLORS.textMuted,
+    letterSpacing: 0.8,
+  },
+  scopeTextActive: {
+    color: '#FFFFFF',
+    fontWeight: '900',
+  },
+  metricFilterRow: {
     flexDirection: 'row',
-    alignItems: 'flex-end',
-    width: '90%',
-    justifyContent: 'center',
     gap: 8,
+    marginBottom: 16,
+  },
+  metricChip: {
+    flex: 1,
+    paddingVertical: 7,
+    borderRadius: RADII.sm,
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    alignItems: 'center',
+  },
+  metricChipActive: {
+    backgroundColor: 'rgba(0, 191, 255, 0.18)',
+    borderColor: COLORS.electricBlue,
+  },
+  metricChipText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: COLORS.textSecondary,
+    letterSpacing: 0.6,
+  },
+  metricChipTextActive: {
+    color: '#FFFFFF',
+    fontWeight: '900',
+  },
+  podiumWrapper: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'flex-end',
+    height: 195,
+    marginBottom: 16,
+    paddingHorizontal: 8,
   },
   podiumCol: {
     flex: 1,
@@ -413,177 +486,268 @@ const styles = StyleSheet.create({
   podiumPlayer: {
     alignItems: 'center',
     marginBottom: 8,
-    width: '100%',
+  },
+  crownEmoji: {
+    fontSize: 18,
+    marginBottom: 2,
   },
   podiumAvatar: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    borderWidth: 3,
-    backgroundColor: '#1E1E38',
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: '#16162D',
+    borderWidth: 2.5,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 6,
-    elevation: 6,
+    marginBottom: 4,
   },
-  podiumAvatarFirst: {
-    width: 76,
-    height: 76,
-    borderRadius: 38,
-    borderWidth: 4,
+  podiumAvatar1: {
+    width: 62,
+    height: 62,
+    borderRadius: 31,
+    borderWidth: 3,
   },
-  podiumEmoji: { fontSize: 28 },
-  podiumEmojiFirst: { fontSize: 36 },
-  podiumBadge: {
-    position: 'absolute',
-    bottom: -6,
-    right: -6,
-    fontSize: 16,
+  podiumEmoji: {
+    fontSize: 24,
   },
-  podiumBadgeFirst: {
+  medalPill: {
     position: 'absolute',
     bottom: -4,
-    right: -4,
-    fontSize: 22,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  medalPillText: {
+    color: '#080811',
+    fontSize: 10,
+    fontWeight: '900',
   },
   podiumName: {
-    color: '#8F8FBC',
-    fontSize: 12,
-    fontWeight: '600',
-    marginTop: 8,
-    textAlign: 'center',
-    width: 90,
-  },
-  podiumVal: {
     fontSize: 11,
-    fontWeight: '800',
-    color: '#00BFFF',
-    marginTop: 2,
-  },
-  podiumBar: {
-    width: '100%',
-    borderTopLeftRadius: 8,
-    borderTopRightRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#16162E',
-    borderWidth: 1,
-    borderColor: '#2A2A4D',
-    borderBottomWidth: 0,
-  },
-  podiumBarFirst: {
-    height: 90,
-    backgroundColor: '#FFD70014',
-    borderColor: '#FFD70044',
-  },
-  podiumBarSecond: {
-    height: 65,
-    backgroundColor: '#C0C0C010',
-    borderColor: '#C0C0C033',
-  },
-  podiumBarThird: {
-    height: 48,
-    backgroundColor: '#CD7F320D',
-    borderColor: '#CD7F3222',
-  },
-  podiumRankText: {
-    color: '#4A4A6A',
-    fontWeight: '900',
-    fontSize: 22,
-  },
-
-  // List Rows
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#16162A',
-    gap: 12,
-  },
-  rowHighlight: {
-    backgroundColor: '#1E1E38',
-  },
-  rankCol: { width: 28, alignItems: 'center' },
-  rankNum: { color: '#6A6A8C', fontWeight: '900', fontSize: 14 },
-
-  avatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    borderWidth: 2,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  avatarEmoji: { fontSize: 20 },
-
-  info: { flex: 1 },
-  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  name: {
-    fontSize: 15,
     fontWeight: '700',
     color: '#FFFFFF',
-    flex: 1,
+    maxWidth: 90,
+    textAlign: 'center',
   },
-  youBadge: {
-    backgroundColor: '#00BFFF1C',
-    color: '#00BFFF',
-    fontSize: 9,
-    fontWeight: '900',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    letterSpacing: 1,
+  podiumScore: {
+    fontSize: 10,
+    fontWeight: '800',
+    fontVariant: ['tabular-nums'],
+    marginTop: 2,
+  },
+  podiumPedestal: {
+    width: '92%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderTopLeftRadius: RADII.sm,
+    borderTopRightRadius: RADII.sm,
+    backgroundColor: 'rgba(22, 22, 45, 0.95)',
     borderWidth: 1,
-    borderColor: '#00BFFF44',
+    borderColor: 'rgba(255, 255, 255, 0.12)',
   },
-  subStats: { fontSize: 11, color: '#4A4A6A', marginTop: 3 },
-
-  metricCol: { alignItems: 'flex-end', justifyContent: 'center' },
-  metricVal: { fontSize: 15, fontWeight: '900' },
-
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0D0D1A' },
-  loadingText: { color: '#00BFFF', marginTop: 16, fontSize: 14, fontWeight: '600' },
-  emptyEmoji: { fontSize: 64, marginBottom: 16 },
-  emptyText: { color: '#FFFFFF', fontSize: 18, fontWeight: '700' },
-  emptySubText: { color: '#4A4A6A', fontSize: 13, marginTop: 8 },
-
-  // Sticky personal rank card at the bottom
-  stickyCard: {
-    position: 'absolute',
-    bottom: 20,
-    left: 20,
-    right: 20,
-    backgroundColor: '#18182E9F',
-    borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: '#00BFFF55',
+  podiumPedestal1: {
+    height: 72,
+    borderColor: COLORS.gold,
+    backgroundColor: 'rgba(255, 215, 0, 0.12)',
+  },
+  podiumPedestal2: {
+    height: 52,
+    borderColor: COLORS.silver,
+    backgroundColor: 'rgba(192, 192, 216, 0.10)',
+  },
+  podiumPedestal3: {
+    height: 38,
+    borderColor: COLORS.bronze,
+    backgroundColor: 'rgba(205, 127, 50, 0.10)',
+  },
+  pedestalRank: {
+    fontSize: 12,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    letterSpacing: 1,
+  },
+  activityFilterRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 6,
+    marginBottom: 8,
+  },
+  activityPill: {
+    flex: 1,
+    paddingVertical: 6,
+    borderRadius: RADII.pill,
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+  },
+  activityPillActive: {
+    backgroundColor: 'rgba(0, 255, 136, 0.18)',
+    borderWidth: 1,
+    borderColor: COLORS.neonGreen,
+  },
+  activityPillText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: COLORS.textMuted,
+    letterSpacing: 0.6,
+  },
+  activityPillTextActive: {
+    color: COLORS.neonGreen,
+    fontWeight: '900',
+  },
+  listContent: {
+    paddingHorizontal: SPACING.md,
+    paddingBottom: 94,
+  },
+  playerRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    gap: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.4,
-    shadowRadius: 10,
-    elevation: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginBottom: 8,
   },
-  stickyRankCol: {
+  rankCol: {
     width: 32,
     alignItems: 'center',
   },
-  stickyRankNum: {
-    color: '#00BFFF',
+  rankNumber: {
+    fontSize: 13,
     fontWeight: '900',
-    fontSize: 16,
+    color: COLORS.textMuted,
+    fontVariant: ['tabular-nums'],
+  },
+  avatarRing: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#16162D',
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  avatarEmoji: {
+    fontSize: 18,
+  },
+  infoCol: {
+    flex: 1,
+  },
+  nameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  playerName: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    maxWidth: 160,
+  },
+  youTag: {
+    fontSize: 9,
+    fontWeight: '900',
+    color: '#080811',
+    backgroundColor: COLORS.neonGreen,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 4,
+    marginLeft: 6,
+  },
+  playerSub: {
+    fontSize: 10,
+    color: COLORS.textSecondary,
+    marginTop: 2,
+  },
+  metricCol: {
+    alignItems: 'flex-end',
+  },
+  metricValText: {
+    fontSize: 13,
+    fontWeight: '900',
+    fontVariant: ['tabular-nums'],
+  },
+  stickyUserCardContainer: {
+    position: 'absolute',
+    bottom: 12,
+    left: SPACING.md,
+    right: SPACING.md,
+    zIndex: 30,
+  },
+  stickyCard: {
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    backgroundColor: 'rgba(18, 18, 38, 0.95)',
+  },
+  stickyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  stickyRankCol: {
+    alignItems: 'center',
+    paddingRight: 12,
+    borderRightWidth: 1,
+    borderRightColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  stickyRankNum: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: COLORS.neonGreen,
+    fontVariant: ['tabular-nums'],
+  },
+  stickyRankLabel: {
+    fontSize: 8,
+    fontWeight: '900',
+    color: COLORS.textMuted,
+    letterSpacing: 0.6,
+  },
+  stickyInfoCol: {
+    flex: 1,
+    paddingHorizontal: 12,
   },
   stickyName: {
-    fontSize: 15,
+    fontSize: 13,
     fontWeight: '900',
     color: '#FFFFFF',
+  },
+  stickySub: {
+    fontSize: 10,
+    color: COLORS.textSecondary,
+    marginTop: 2,
+  },
+  stickyScoreCol: {
+    alignItems: 'flex-end',
+  },
+  stickyScoreVal: {
+    fontSize: 14,
+    fontWeight: '900',
+    color: COLORS.neonGreen,
+    fontVariant: ['tabular-nums'],
+  },
+  stickyScoreLbl: {
+    fontSize: 8,
+    fontWeight: '800',
+    color: COLORS.textMuted,
+    letterSpacing: 0.6,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    color: COLORS.textSecondary,
+    fontSize: 11,
+    fontWeight: '800',
+    marginTop: 12,
+    letterSpacing: 1,
+  },
+  emptyContainer: {
+    alignItems: 'center',
+    paddingVertical: 32,
+  },
+  emptyText: {
+    color: COLORS.textSecondary,
+    fontSize: 12,
   },
 });

@@ -1,7 +1,35 @@
+/**
+ * AuthScreen — Cyberpunk Esports Login & Onboarding for StrideClash.
+ *
+ * Features:
+ * - High-contrast futuristic theme with neon green & electric blue accents
+ * - Quick toggle between INITIATE LINK (Login) and CREATE ACCOUNT (Register)
+ * - Class Archetype Selector during registration (Scout ⚡ / Warrior ⚔️ / Titan 🛡️ / Ghost 👻)
+ * - Safe area & keyboard-avoiding handling
+ */
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  KeyboardAvoidingView,
+  Platform,
+  ActivityIndicator,
+  StatusBar,
+  ScrollView,
+} from 'react-native';
 import { useAuth } from '../context/AuthContext';
-import { THEME } from '../utils/theme';
+import {
+  COLORS,
+  CLASS_THEMES,
+  SPACING,
+  RADII,
+  SHADOWS,
+} from '@/theme/tokens';
+import { GameButton, GlassCard } from '@/components/ui';
+import { CharacterType } from '@runwars/shared';
 
 export default function AuthScreen() {
   const { login, register, isLoading } = useAuth();
@@ -9,103 +37,172 @@ export default function AuthScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
+  const [selectedClass, setSelectedClass] = useState<CharacterType>('scout');
   const [error, setError] = useState('');
 
   const handleSubmit = async () => {
     if (!email || !password || (!isLogin && !displayName)) {
-      setError('Please fill in all fields');
+      setError('Please fill in all required fields.');
       return;
     }
     setError('');
-    
+
     try {
       if (isLogin) {
         await login(email, password);
       } else {
-        // Defaulting new users to Scout
-        await register(email, password, displayName, 'scout', THEME.classes.scout);
+        const theme = CLASS_THEMES[selectedClass as keyof typeof CLASS_THEMES];
+        const classColor = theme ? theme.color : COLORS.neonGreen;
+        await register(email, password, displayName, selectedClass, classColor);
       }
     } catch (err: any) {
-      setError(err.message || 'Authentication failed');
+      setError(err.message || 'Authentication link failed.');
     }
   };
 
+  const selectedClassMeta = CLASS_THEMES[selectedClass as keyof typeof CLASS_THEMES];
+
   return (
-    <KeyboardAvoidingView 
-      style={styles.container} 
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <View style={styles.content}>
+      <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
+
+      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        {/* Branding Header */}
         <View style={styles.header}>
+          <Text style={styles.logoIcon}>⚡</Text>
           <Text style={styles.title}>STRIDECLASH</Text>
-          <Text style={styles.subtitle}>{isLogin ? 'Welcome Back, Runner' : 'Join the Battle'}</Text>
+          <Text style={styles.subtitle}>
+            {isLogin ? 'VANGUARD SECURE LINK' : 'JOIN THE GLOBAL TURF CONQUEST'}
+          </Text>
         </View>
 
-        <View style={styles.form}>
-          {error ? <Text style={styles.errorText}>{error}</Text> : null}
+        <GlassCard style={styles.card} variant="neonBorder" glow>
+          {/* Mode Switcher */}
+          <View style={styles.modeTabs}>
+            <TouchableOpacity
+              style={[styles.modeTab, isLogin && styles.modeTabActive]}
+              onPress={() => {
+                setIsLogin(true);
+                setError('');
+              }}
+            >
+              <Text style={[styles.modeTabText, isLogin && styles.modeTabTextActive]}>
+                LOGIN
+              </Text>
+            </TouchableOpacity>
 
+            <TouchableOpacity
+              style={[styles.modeTab, !isLogin && styles.modeTabActive]}
+              onPress={() => {
+                setIsLogin(false);
+                setError('');
+              }}
+            >
+              <Text style={[styles.modeTabText, !isLogin && styles.modeTabTextActive]}>
+                REGISTER
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Error Callout */}
+          {error ? (
+            <View style={styles.errorBanner}>
+              <Text style={styles.errorText}>⚠️ {error}</Text>
+            </View>
+          ) : null}
+
+          {/* Form Fields */}
           {!isLogin && (
             <View style={styles.inputContainer}>
-              <Text style={styles.label}>DISPLAY NAME</Text>
+              <Text style={styles.inputLabel}>CALLSIGN / RUNNER NAME</Text>
               <TextInput
                 style={styles.input}
                 value={displayName}
                 onChangeText={setDisplayName}
-                placeholder="e.g. SonicRunner"
-                placeholderTextColor="rgba(255,255,255,0.3)"
+                placeholder="e.g. ApexRunner"
+                placeholderTextColor={COLORS.textMuted}
                 autoCapitalize="none"
               />
             </View>
           )}
 
           <View style={styles.inputContainer}>
-            <Text style={styles.label}>EMAIL</Text>
+            <Text style={styles.inputLabel}>EMAIL ADDRESS</Text>
             <TextInput
               style={styles.input}
               value={email}
               onChangeText={setEmail}
-              placeholder="runner@example.com"
-              placeholderTextColor="rgba(255,255,255,0.3)"
+              placeholder="runner@strideclash.com"
+              placeholderTextColor={COLORS.textMuted}
               keyboardType="email-address"
               autoCapitalize="none"
             />
           </View>
 
           <View style={styles.inputContainer}>
-            <Text style={styles.label}>PASSWORD</Text>
+            <Text style={styles.inputLabel}>ACCESS KEY / PASSWORD</Text>
             <TextInput
               style={styles.input}
               value={password}
               onChangeText={setPassword}
               placeholder="••••••••"
-              placeholderTextColor="rgba(255,255,255,0.3)"
+              placeholderTextColor={COLORS.textMuted}
               secureTextEntry
             />
           </View>
 
-          <TouchableOpacity 
-            style={[styles.button, isLoading && styles.buttonDisabled]} 
-            onPress={handleSubmit}
-            disabled={isLoading}
-          >
-            {isLoading ? (
-              <ActivityIndicator color="#000" />
-            ) : (
-              <Text style={styles.buttonText}>{isLogin ? 'INITIATE LINK' : 'CREATE ACCOUNT'}</Text>
-            )}
-          </TouchableOpacity>
+          {/* Class Archetype Selection (Only during registration) */}
+          {!isLogin && (
+            <View style={styles.classSection}>
+              <Text style={styles.inputLabel}>CHOOSE YOUR CLASS ARCHETYPE</Text>
+              <View style={styles.classPickerRow}>
+                {(['scout', 'warrior', 'titan', 'ghost'] as CharacterType[]).map((cKey) => {
+                  const meta = CLASS_THEMES[cKey as keyof typeof CLASS_THEMES];
+                  const isCur = selectedClass === cKey;
 
-          <TouchableOpacity 
-            style={styles.switchButton} 
-            onPress={() => { setIsLogin(!isLogin); setError(''); }}
-            disabled={isLoading}
-          >
-            <Text style={styles.switchText}>
-              {isLogin ? "DON'T HAVE AN ACCOUNT? RECRUIT NOW" : 'ALREADY A VETERAN? LOG IN'}
-            </Text>
-          </TouchableOpacity>
-        </View>
-      </View>
+                  return (
+                    <TouchableOpacity
+                      key={cKey}
+                      style={[
+                        styles.classChip,
+                        isCur && { borderColor: meta.color, borderWidth: 1.5, backgroundColor: 'rgba(255, 255, 255, 0.08)' },
+                      ]}
+                      onPress={() => setSelectedClass(cKey)}
+                    >
+                      <Text style={styles.classChipEmoji}>{meta.emoji}</Text>
+                      <Text style={[styles.classChipName, isCur && { color: meta.color, fontWeight: '900' }]}>
+                        {meta.name}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              {/* Selected Class Perk Description */}
+              <View style={[styles.perkBox, { borderColor: selectedClassMeta.color }]}>
+                <Text style={[styles.perkTitle, { color: selectedClassMeta.color }]}>
+                  {selectedClassMeta.name.toUpperCase()} PERK: {selectedClassMeta.bonus}
+                </Text>
+                <Text style={styles.perkDesc}>{selectedClassMeta.description}</Text>
+              </View>
+            </View>
+          )}
+
+          {/* Submit Action */}
+          <GameButton
+            title={isLogin ? 'INITIATE LINK   →' : 'CREATE ACCOUNT   ⚡'}
+            onPress={handleSubmit}
+            variant="primary"
+            size="lg"
+            isLoading={isLoading}
+            style={{ marginTop: 18 }}
+            testID="auth-submit-btn"
+          />
+        </GlassCard>
+      </ScrollView>
     </KeyboardAvoidingView>
   );
 }
@@ -113,92 +210,141 @@ export default function AuthScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: THEME.colors.background,
+    backgroundColor: COLORS.bgCanvas,
   },
-  content: {
-    flex: 1,
+  scrollContent: {
+    flexGrow: 1,
     justifyContent: 'center',
-    padding: 24,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: 48,
   },
   header: {
     alignItems: 'center',
-    marginBottom: 48,
+    marginBottom: SPACING.xl,
+  },
+  logoIcon: {
+    fontSize: 40,
+    marginBottom: 6,
   },
   title: {
-    fontFamily: 'BlackOpsOne-Regular',
-    fontSize: 48,
-    color: THEME.colors.primary,
-    textShadowColor: THEME.colors.primary,
-    textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 10,
-    marginBottom: 8,
+    fontSize: 28,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    letterSpacing: 2,
   },
   subtitle: {
-    fontSize: 16,
-    color: THEME.colors.textSecondary,
-    letterSpacing: 2,
-    textTransform: 'uppercase',
+    fontSize: 10,
+    fontWeight: '800',
+    color: COLORS.neonGreen,
+    letterSpacing: 1.5,
+    marginTop: 4,
   },
-  form: {
-    width: '100%',
+  card: {
+    padding: SPACING.lg,
   },
-  inputContainer: {
-    marginBottom: 20,
+  modeTabs: {
+    flexDirection: 'row',
+    backgroundColor: 'rgba(0, 0, 0, 0.35)',
+    borderRadius: RADII.pill,
+    padding: 3,
+    marginBottom: SPACING.lg,
   },
-  label: {
-    color: THEME.colors.primary,
-    fontSize: 12,
-    fontWeight: 'bold',
-    marginBottom: 8,
-    letterSpacing: 1,
+  modeTab: {
+    flex: 1,
+    paddingVertical: 10,
+    alignItems: 'center',
+    borderRadius: RADII.pill,
   },
-  input: {
-    backgroundColor: 'rgba(255,255,255,0.05)',
+  modeTabActive: {
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
     borderWidth: 1,
-    borderColor: 'rgba(0, 191, 255, 0.3)',
-    borderRadius: 8,
-    padding: 16,
-    color: THEME.colors.text,
-    fontSize: 16,
+    borderColor: COLORS.borderMedium,
   },
-  button: {
-    backgroundColor: THEME.colors.primary,
-    padding: 18,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginTop: 12,
-    shadowColor: THEME.colors.primary,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.5,
-    shadowRadius: 10,
-    elevation: 5,
-  },
-  buttonDisabled: {
-    opacity: 0.7,
-  },
-  buttonText: {
-    color: '#000',
-    fontSize: 16,
-    fontWeight: 'bold',
-    letterSpacing: 2,
-  },
-  switchButton: {
-    marginTop: 24,
-    alignItems: 'center',
-  },
-  switchText: {
-    color: THEME.colors.textSecondary,
-    fontSize: 12,
+  modeTabText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: COLORS.textMuted,
     letterSpacing: 1,
+  },
+  modeTabTextActive: {
+    color: '#FFFFFF',
+    fontWeight: '900',
+  },
+  errorBanner: {
+    backgroundColor: 'rgba(255, 42, 85, 0.15)',
+    borderWidth: 1,
+    borderColor: COLORS.crimson,
+    borderRadius: RADII.sm,
+    padding: 10,
+    marginBottom: 12,
   },
   errorText: {
-    color: '#FF4D4D',
-    textAlign: 'center',
-    marginBottom: 16,
-    backgroundColor: 'rgba(255, 77, 77, 0.1)',
-    padding: 10,
-    borderRadius: 8,
+    color: COLORS.crimson,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  inputContainer: {
+    marginBottom: 14,
+  },
+  inputLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: COLORS.textSecondary,
+    letterSpacing: 0.8,
+    marginBottom: 6,
+  },
+  input: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
     borderWidth: 1,
-    borderColor: 'rgba(255, 77, 77, 0.3)',
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+    borderRadius: RADII.sm,
+    color: '#FFFFFF',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 14,
+  },
+  classSection: {
+    marginTop: 6,
+    marginBottom: 10,
+  },
+  classPickerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 6,
+  },
+  classChip: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 8,
+    borderRadius: RADII.sm,
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  classChipEmoji: {
+    fontSize: 18,
+    marginBottom: 2,
+  },
+  classChipName: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: COLORS.textMuted,
+  },
+  perkBox: {
+    marginTop: 10,
+    padding: 10,
+    backgroundColor: 'rgba(0, 0, 0, 0.25)',
+    borderWidth: 1,
+    borderRadius: RADII.sm,
+  },
+  perkTitle: {
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+  },
+  perkDesc: {
+    fontSize: 10,
+    color: COLORS.textSecondary,
+    marginTop: 2,
   },
 });

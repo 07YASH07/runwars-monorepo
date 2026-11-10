@@ -9,12 +9,13 @@ import {
   StatusBar,
   Modal,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { useMultiplayer } from '@/hooks/useMultiplayer';
 import { CHARACTER_EMOJI, CharacterType } from '@runwars/shared';
 import { useAuth } from '@/context/AuthContext';
 
-const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.2.2:3000';
+import { apiFetch } from '@/config/api';
 
 interface ProfileStats {
   total_distance: number;
@@ -44,6 +45,8 @@ export default function CommunityScreen() {
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [profileData, setProfileData] = useState<ProfileData | null>(null);
   const [loadingProfile, setLoadingProfile] = useState(false);
+  const [isFollowingSelected, setIsFollowingSelected] = useState(false);
+  const [followToggleBusy, setFollowToggleBusy] = useState(false);
 
   // Recommended Runners State
   const [recommendedUsers, setRecommendedUsers] = useState<any[]>([]);
@@ -53,7 +56,7 @@ export default function CommunityScreen() {
     if (!user) return;
     const fetchRecommended = async () => {
       try {
-        const res = await fetch(`${API_URL}/api/community/nearby?userId=${user.uid}`, {
+        const res = await apiFetch(`/api/community/nearby?userId=${user.uid}`, {
           headers: { 'Bypass-Tunnel-Reminder': 'true' }
         });
         if (res.ok) {
@@ -78,13 +81,20 @@ export default function CommunityScreen() {
     setProfileVisible(true);
     setLoadingProfile(true);
     setProfileData(null);
+    setIsFollowingSelected(false);
     try {
-      const res = await fetch(`${API_URL}/api/profile/${targetUserId}`, {
-        headers: { 'Bypass-Tunnel-Reminder': 'true' }
-      });
-      if (res.ok) {
-        const data = await res.json();
+      const [profileRes, myFollowingRes] = await Promise.all([
+        apiFetch(`/api/profile/${targetUserId}`, { headers: { 'Bypass-Tunnel-Reminder': 'true' } }),
+        user?.uid ? apiFetch(`/api/followers/${user.uid}`) : Promise.resolve(null as any),
+      ]);
+      if (profileRes.ok) {
+        const data = await profileRes.json();
         setProfileData(data);
+      }
+      if (myFollowingRes && myFollowingRes.ok) {
+        const fd = await myFollowingRes.json();
+        const following = (fd.following || []) as Array<{ id: string }>;
+        setIsFollowingSelected(following.some(u => u.id === targetUserId));
       }
     } catch (err) {
       console.error('[Community] Failed to load profile:', err);
@@ -269,26 +279,47 @@ export default function CommunityScreen() {
 
                 {user?.uid !== profileData.user.id && (
                   <TouchableOpacity
-                    style={[styles.followBtn, { backgroundColor: profileData.user.color }]}
+                    style={[
+                      styles.followBtn,
+                      isFollowingSelected
+                        ? { backgroundColor: 'transparent', borderWidth: 1.5, borderColor: profileData.user.color }
+                        : { backgroundColor: profileData.user.color }
+                    ]}
+                    disabled={followToggleBusy}
                     onPress={async () => {
+                      if (!user?.uid) return;
+                      setFollowToggleBusy(true);
+                      const target = profileData.user.id;
+                      const nextFollowing = !isFollowingSelected;
                       try {
-                        const res = await fetch(`${API_URL}/api/followers/follow`, {
+                        const path = nextFollowing ? '/api/followers/follow' : '/api/followers/unfollow';
+                        const res = await apiFetch(path, {
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ userId: user?.uid, followingId: profileData.user.id })
+                          body: JSON.stringify({ userId: user.uid, followingId: target })
                         });
                         if (res.ok) {
-                          alert(`You are now following ${profileData.user.display_name}!`);
-                          setProfileVisible(false);
+                          setIsFollowingSelected(nextFollowing);
                         } else {
-                          alert('Failed to follow user.');
+                          Alert.alert('Error', nextFollowing ? 'Failed to follow user.' : 'Failed to unfollow user.');
                         }
                       } catch (err) {
-                        alert('Network error.');
+                        Alert.alert('Network', 'Could not reach server.');
+                      } finally {
+                        setFollowToggleBusy(false);
                       }
                     }}
                   >
-                    <Text style={styles.followBtnText}>+ FOLLOW</Text>
+                    {followToggleBusy ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <Text style={[
+                        styles.followBtnText,
+                        isFollowingSelected && { color: profileData.user.color }
+                      ]}>
+                        {isFollowingSelected ? '✓ FOLLOWING' : '+ FOLLOW'}
+                      </Text>
+                    )}
                   </TouchableOpacity>
                 )}
               </>

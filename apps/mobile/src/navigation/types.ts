@@ -1,7 +1,11 @@
 /**
- * Navigation type definitions for RunWars.
- * All stack and tab param lists are strictly typed here.
+ * Navigation type definitions for StrideClash.
+ * 5 bottom tabs, two of which host nested top-tab navigators.
+ * See App.tsx for the actual tree.
  */
+
+import type { PostRunParams } from '@/screens/PostRunScreen';
+import type { FollowersListParams } from '@/screens/FollowersListScreen';
 
 // ─── Auth Stack ───────────────────────────────────────────────────────────────
 
@@ -11,19 +15,34 @@ export type AuthStackParamList = {
   CharacterSelect: undefined;
 };
 
-// ─── Main Tab Navigator ───────────────────────────────────────────────────────
+// ─── Main 5-Tab Navigator ─────────────────────────────────────────────────────
+// MAP | COMPETE | RUN | COMMUNITY | PROFILE
 
 export type MainTabParamList = {
+  MAP: undefined;
+  COMPETE: undefined;
+  RUN: undefined;
+  COMMUNITY: undefined;
+  PROFILE: undefined;
+};
+
+// COMPETE inner tabs
+export type CompeteTopTabParamList = {
+  Battles: undefined;
+  Rankings: undefined;
+};
+
+// COMMUNITY inner tabs
+export type CommunityTopTabParamList = {
   Feed: undefined;
-  Community: undefined;
-  Activity: undefined;
-  Progress: undefined;
-  Profile: undefined;
+  Players: undefined;
 };
 
 // ─── Root Stack ───────────────────────────────────────────────────────────────
 
 export type RootStackParamList = {
-  Auth: undefined;    // nested AuthStack
-  Main: undefined;    // nested MainTabs
+  Auth: undefined;
+  Main: undefined;
+  PostRun: PostRunParams;
+  FollowersList: FollowersListParams;
 };

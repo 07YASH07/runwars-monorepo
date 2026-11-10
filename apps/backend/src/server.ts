@@ -5,10 +5,12 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import morgan from 'morgan';
 import path from 'path';
+import fs from 'fs';
 import { Pool } from 'pg';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { Expo } from 'expo-server-sdk';
+import { localStore, LocalUser } from './localStore';
 import {
   LivePlayerState,
   Territory,
@@ -27,6 +29,43 @@ app.use(morgan('dev'));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use('/admin', express.static(path.join(__dirname, '../../admin/dist')));
+
+// Direct APK download route for mobile devices
+app.get(['/download/strideclash.apk', '/strideclash.apk', '/download/apk', '/apk'], (req, res) => {
+  const possiblePaths = [
+    'C:/Users/Dell/.gemini/antigravity/scratch/runwars/strideclash.apk',
+    path.join(__dirname, '../../../apps/mobile/android/app/build/outputs/apk/release/app-release.apk'),
+    path.join(__dirname, '../../../apps/mobile/android/app/build/outputs/apk/release/app-arm64-v8a-release.apk'),
+    'C:/Users/Dell/.gemini/antigravity/scratch/runwars/apps/mobile/android/app/build/outputs/apk/release/app-release.apk',
+    'R:/apps/mobile/android/app/build/outputs/apk/release/app-release.apk'
+  ];
+
+  for (const p of possiblePaths) {
+    if (fs.existsSync(p)) {
+      return res.download(p, 'strideclash.apk');
+    }
+  }
+
+  const dir = path.join(__dirname, '../../../apps/mobile/android/app/build/outputs/apk/release');
+  if (fs.existsSync(dir)) {
+    const apks = fs.readdirSync(dir).filter(f => f.endsWith('.apk'));
+    if (apks.length > 0) {
+      return res.download(path.join(dir, apks[0]), 'strideclash.apk');
+    }
+  }
+
+  res.status(503).send(`
+    <html>
+      <head><meta http-equiv="refresh" content="10"><title>Building StrideClash APK</title></head>
+      <body style="background:#0A0A14;color:#00BFFF;font-family:sans-serif;text-align:center;padding:50px;">
+        <h2>⚙️ StrideClash APK compilation is in progress...</h2>
+        <p style="color:#8A8AAB;">Gradle is currently packaging the release binary on the server.</p>
+        <p style="color:#fff;">This page will automatically refresh every 10 seconds and start downloading when ready!</p>
+      </body>
+    </html>
+  `);
+});
+
 app.get('/admin/*', (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.setHeader('Pragma', 'no-cache');
@@ -44,25 +83,59 @@ const io = new Server(server, {
 });
 
 // --- PostgreSQL Connection ---
+const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://postgres@localhost:5432/runwars';
+// Managed Postgres (Supabase, Render, AWS RDS, Neon) requires TLS. Disable
+// only for a bare localhost dev DB.
+const requiresSsl = !/localhost|127\.0\.0\.1/.test(DATABASE_URL);
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || 'postgresql://postgres@localhost:5432/runwars',
+  connectionString: DATABASE_URL,
+  ssl: requiresSsl ? { rejectUnauthorized: false } : undefined,
+  connectionTimeoutMillis: 10000,
+  idleTimeoutMillis: 30000,
+  max: 10,
 });
 
-pool.connect().then(async () => {
-  console.log('✅ [Database] Connected to PostgreSQL successfully!');
-  try {
-    const res = await pool.query('SELECT id, expo_push_token FROM users WHERE expo_push_token IS NOT NULL');
-    for (const row of res.rows) {
-      pushTokens.set(row.id, row.expo_push_token);
-    }
-    console.log(`📡 [Push] Loaded ${pushTokens.size} push tokens from database.`);
-  } catch (err: any) {
-    console.error('❌ [Push] Failed to load push tokens on startup:', err.message);
-  }
-}).catch((err) => {
-  console.error('❌ [Database] Failed to connect to PostgreSQL:', err.message);
-  console.log('⚠️  [Server] Running in memory-only mode (territories will not persist).');
+// Live, continuously-updated DB state (not a one-shot flag).
+let isDbConnected = false;
+let dbLastError: string | null = null;
+let dbLastCheckedAt = 0;
+
+function redactUrl(msg: string): string {
+  // Strip any accidental credentials from error output.
+  return msg.replace(/postgres(ql)?:\/\/[^@\s]+@/gi, 'postgres://***@');
+}
+
+pool.on('error', (err: any) => {
+  isDbConnected = false;
+  dbLastError = redactUrl(err?.message || String(err));
+  console.error('[Database] pool error:', dbLastError);
+  // Never process.exit — bounce the flag and let the next probe recover.
 });
+
+async function probeDb(timeoutMs = 5000): Promise<boolean> {
+  dbLastCheckedAt = Date.now();
+  try {
+    const client = await pool.connect();
+    try {
+      await Promise.race([
+        client.query('SELECT 1'),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('probe timeout')), timeoutMs)),
+      ]);
+      if (!isDbConnected) console.log('[Database] connection healthy');
+      isDbConnected = true;
+      dbLastError = null;
+      return true;
+    } finally {
+      client.release();
+    }
+  } catch (e: any) {
+    if (isDbConnected) console.error('[Database] probe failed:', redactUrl(e.message));
+    isDbConnected = false;
+    dbLastError = redactUrl(e?.message || String(e));
+    return false;
+  }
+}
 
 // --- In-Memory Live State (real-time only, not persisted) ---
 const livePlayers = new Map<string, LivePlayerState>();
@@ -71,6 +144,35 @@ const userToSocket = new Map<string, string>(); // userId -> socketId for target
 const pushTokens = new Map<string, string>();   // userId -> Expo push token
 const ongoingDbWrites = new Map<string, Promise<any>>();
 const lastAlerts = new Map<string, number>();   // spam prevention for invasion alerts
+
+// Bounded exponential backoff on startup — never blocks the HTTP server from
+// starting; the fallback store answers requests while we retry in the background.
+(async () => {
+  console.log('[Database] connecting…');
+  let delay = 2000;
+  for (let i = 1; i <= 6; i++) {
+    if (await probeDb()) {
+      try {
+        const res = await pool.query('SELECT id, expo_push_token FROM users WHERE expo_push_token IS NOT NULL');
+        for (const row of res.rows) {
+          pushTokens.set(row.id, row.expo_push_token);
+          localStore.upsertUser(row.id, { expo_push_token: row.expo_push_token });
+        }
+        console.log(`[Push] Loaded ${pushTokens.size} push tokens from database.`);
+      } catch (err: any) {
+        console.error('[Push] Failed to load push tokens:', redactUrl(err.message));
+      }
+      return;
+    }
+    console.error(`[Database] connect attempt ${i} failed (${dbLastError}); retry in ${delay}ms`);
+    await new Promise(r => setTimeout(r, delay));
+    delay = Math.min(delay * 2, 30000);
+  }
+  console.error('[Database] gave up after 6 attempts — degraded mode (local JSON fallback) active. Will keep re-probing every 60s.');
+})();
+
+// Periodic re-probe so we recover automatically when the DB comes back.
+setInterval(() => { probeDb().catch(() => {}); }, 60000);
 
 // In-memory push notification log (Phase 4)
 interface PushLogEntry { title: string; body: string; sentCount: number; timestamp: string; }
@@ -115,15 +217,20 @@ function isPointInPolygon(point: { latitude: number; longitude: number }, polygo
   return inside;
 }
 
-// Get total distance run by a player from DB
+// Get total distance run by a player from DB or local store
 async function getPlayerTotalDistance(userId: string): Promise<number> {
-  try {
-    const res = await pool.query(
-      `SELECT COALESCE(SUM(distance_meters), 0)::float AS total FROM runs WHERE user_id = $1`,
-      [userId]
-    );
-    return res.rows[0]?.total ?? 0;
-  } catch { return 0; }
+  const localDist = localStore.getUserStats(userId).total_distance;
+  if (localDist > 0) return localDist;
+  if (isDbConnected) {
+    try {
+      const res = await pool.query(
+        `SELECT COALESCE(SUM(distance_meters), 0)::float AS total FROM runs WHERE user_id = $1`,
+        [userId]
+      );
+      return res.rows[0]?.total ?? 0;
+    } catch { return 0; }
+  }
+  return 0;
 }
 
 // Delete territory from DB
@@ -153,18 +260,21 @@ async function sendPushNotification(pushToken: string, title: string, body: stri
 // --- DB Helper Functions ---
 
 async function upsertUser(userId: string, data: Partial<{ email: string; display_name: string; character_type: string; color: string }>) {
-  try {
-    await pool.query(
-      `INSERT INTO users (id, email, display_name, character_type, color)
-       VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (id) DO UPDATE SET
-         display_name = EXCLUDED.display_name,
-         character_type = EXCLUDED.character_type,
-         color = EXCLUDED.color`,
-      [userId, data.email || null, data.display_name || null, data.character_type || null, data.color || null]
-    );
-  } catch (err: any) {
-    console.error('[DB] upsertUser error:', err.message);
+  localStore.upsertUser(userId, data);
+  if (isDbConnected) {
+    try {
+      await pool.query(
+        `INSERT INTO users (id, email, display_name, character_type, color)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (id) DO UPDATE SET
+           display_name = EXCLUDED.display_name,
+           character_type = EXCLUDED.character_type,
+           color = EXCLUDED.color`,
+        [userId, data.email || null, data.display_name || null, data.character_type || null, data.color || null]
+      );
+    } catch (err: any) {
+      console.error('[DB] upsertUser error:', err.message);
+    }
   }
 }
 
@@ -201,17 +311,26 @@ function calculateDistance(points: any[]): number {
 }
 
 async function saveRun(userId: string, routePoints: any[], distanceMeters: number, activityType?: string) {
-  try {
-    const result = await pool.query(
-      `INSERT INTO runs (user_id, route_points, distance_meters, activity_type)
-       VALUES ($1, $2, $3, $4) RETURNING id`,
-      [userId, JSON.stringify(routePoints), distanceMeters, activityType || 'run']
-    );
-    return result.rows[0]?.id;
-  } catch (err: any) {
-    console.error('[DB] saveRun error:', err.message);
-    return null;
+  localStore.addRun({
+    user_id: userId,
+    route_points: routePoints,
+    distance_meters: distanceMeters,
+    activity_type: activityType || 'run',
+    created_at: new Date().toISOString()
+  });
+  if (isDbConnected) {
+    try {
+      const result = await pool.query(
+        `INSERT INTO runs (user_id, route_points, distance_meters, activity_type)
+         VALUES ($1, $2, $3, $4) RETURNING id`,
+        [userId, JSON.stringify(routePoints), distanceMeters, activityType || 'run']
+      );
+      return result.rows[0]?.id;
+    } catch (err: any) {
+      console.error('[DB] saveRun error:', err.message);
+    }
   }
+  return Date.now();
 }
 
 async function saveTerritory(territory: Territory) {
@@ -615,13 +734,22 @@ io.on('connection', async (socket: Socket) => {
   });
 });
 
-// Health check
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
+// Health check — reports the actual DB state, never claims cloud persistence
+// when the authoritative Postgres is unreachable.
+app.get('/health', async (req, res) => {
+  // Lightweight re-check if stale (avoid probing on every health call).
+  if (Date.now() - dbLastCheckedAt > 15000) {
+    await probeDb(3000).catch(() => {});
+  }
+  const healthy = isDbConnected;
+  res.status(healthy ? 200 : 503).json({
+    status: healthy ? 'ok' : 'degraded',
     playersCount: livePlayers.size,
     territoriesCount: territoriesCache.size,
-    db: pool.totalCount > 0 ? 'connected' : 'disconnected',
+    db: healthy ? 'connected' : 'disconnected',
+    persistence: healthy ? 'authoritative_postgres' : 'local_json_fallback',
+    dbError: healthy ? null : dbLastError,
+    checkedAt: new Date(dbLastCheckedAt).toISOString(),
   });
 });
 
@@ -702,9 +830,11 @@ app.get('/api/feed', async (req, res) => {
     `;
 
     const result = await pool.query(queryText, [userId, limit, offset]);
-    res.json(result.rows);
+    if (result.rows && result.rows.length > 0) return res.json(result.rows);
+    return res.json(localStore.getFeed(userId));
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    console.warn('[Feed] DB warning, returning local feed:', err.message);
+    return res.json(localStore.getFeed((req.query.userId as string) || ''));
   }
 });
 
@@ -953,7 +1083,29 @@ app.get('/api/profile/:userId', async (req, res) => {
       following: followingRes.rows
     });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    console.warn('[Profile] DB query warning, falling back to local store:', err.message);
+    const u = localStore.getUserById(userId) || localStore.upsertUser(userId, { display_name: 'Runner', character_type: 'scout', color: '#00BFFF' });
+    const userZones = Array.from(territoriesCache.values()).filter(t => t.userId === userId).length;
+    const stats = localStore.getUserStats(userId, userZones);
+    res.json({
+      user: {
+        id: u.id,
+        display_name: u.display_name || 'Runner',
+        character_type: u.character_type || 'scout',
+        color: u.color || '#00BFFF',
+        bio: u.bio || '',
+        avatar_url: u.avatar_url || '',
+        cover_image_url: u.cover_image_url || '',
+        coins: u.coins || 100,
+        unlocked_colors: u.unlocked_colors || [],
+        selected_avatar: u.selected_avatar || 'scout',
+        unlocked_avatars: u.unlocked_avatars || ['scout']
+      },
+      stats,
+      posts: localStore.getUserPosts(userId),
+      followers: localStore.getFollowers(userId),
+      following: localStore.getFollowing(userId)
+    });
   }
 });
 
@@ -1282,115 +1434,176 @@ app.get('/territories', async (req, res) => {
 // REST: Get global leaderboard ranked by selected activity type and metric
 app.get('/leaderboard', async (req, res) => {
   try {
-    const allowedActivities = ['all', 'run', 'walk', 'cycle'];
-    const allowedMetrics = ['distance', 'territory', 'zones'];
+    if (isDbConnected) {
+      const allowedActivities = ['all', 'run', 'walk', 'cycle'];
+      const allowedMetrics = ['distance', 'territory', 'zones'];
 
-    const activity = allowedActivities.includes(req.query.activity as string)
-      ? (req.query.activity as string)
-      : 'all';
-    const metric = allowedMetrics.includes(req.query.metric as string)
-      ? (req.query.metric as string)
-      : 'territory';
+      const activity = allowedActivities.includes(req.query.activity as string)
+        ? (req.query.activity as string)
+        : 'all';
+      const metric = allowedMetrics.includes(req.query.metric as string)
+        ? (req.query.metric as string)
+        : 'territory';
 
-    // Build filters safely based on whitelisted strings
-    const territoryFilter = activity !== 'all' ? `AND activity_type = '${activity}'` : '';
-    const runFilter = activity !== 'all' ? `AND activity_type = '${activity}'` : '';
+      const territoryFilter = activity !== 'all' ? `AND activity_type = '${activity}'` : '';
+      const runFilter = activity !== 'all' ? `AND activity_type = '${activity}'` : '';
 
-    let orderByColumn = 'total_territory';
-    if (metric === 'distance') orderByColumn = 'total_distance';
-    else if (metric === 'zones') orderByColumn = 'total_zones';
+      let orderByColumn = 'total_territory';
+      if (metric === 'distance') orderByColumn = 'total_distance';
+      else if (metric === 'zones') orderByColumn = 'total_zones';
 
-    const queryText = `
-      SELECT
-        u.id,
-        u.display_name,
-        u.character_type,
-        u.color,
-        COALESCE(t_calc.total_territory, 0)::float AS total_territory,
-        COALESCE(t_calc.total_zones, 0)::int AS total_zones,
-        COALESCE(r_calc.total_runs, 0)::int AS total_runs,
-        COALESCE(r_calc.total_distance, 0)::float AS total_distance
-      FROM users u
-      LEFT JOIN (
+      const queryText = `
         SELECT
-          owner_id AS user_id,
-          SUM(area_square_meters) AS total_territory,
-          COUNT(*) AS total_zones
-        FROM territories
-        WHERE 1=1 ${territoryFilter}
-        GROUP BY owner_id
-      ) t_calc ON t_calc.user_id = u.id
-      LEFT JOIN (
-        SELECT
-          user_id,
-          COUNT(*) AS total_runs,
-          SUM(distance_meters) AS total_distance
-        FROM runs
-        WHERE 1=1 ${runFilter}
-        GROUP BY user_id
-      ) r_calc ON r_calc.user_id = u.id
-      ORDER BY ${orderByColumn} DESC
-      LIMIT 20
-    `;
+          u.id,
+          u.display_name,
+          u.character_type,
+          u.color,
+          COALESCE(t_calc.total_territory, 0)::float AS total_territory,
+          COALESCE(t_calc.total_zones, 0)::int AS total_zones,
+          COALESCE(r_calc.total_runs, 0)::int AS total_runs,
+          COALESCE(r_calc.total_distance, 0)::float AS total_distance
+        FROM users u
+        LEFT JOIN (
+          SELECT
+            owner_id AS user_id,
+            SUM(area_square_meters) AS total_territory,
+            COUNT(*) AS total_zones
+          FROM territories
+          WHERE 1=1 ${territoryFilter}
+          GROUP BY owner_id
+        ) t_calc ON t_calc.user_id = u.id
+        LEFT JOIN (
+          SELECT
+            user_id,
+            COUNT(*) AS total_runs,
+            SUM(distance_meters) AS total_distance
+          FROM runs
+          WHERE 1=1 ${runFilter}
+          GROUP BY user_id
+        ) r_calc ON r_calc.user_id = u.id
+        ORDER BY ${orderByColumn} DESC
+        LIMIT 20
+      `;
 
-    const result = await pool.query(queryText);
-    res.json(result.rows);
+      const result = await pool.query(queryText);
+      if (result.rows && result.rows.length > 0) {
+        return res.json(result.rows);
+      }
+    }
   } catch (err: any) {
-    console.error('[API] /leaderboard error:', err.message);
-    res.status(500).json({ error: 'Failed to load leaderboard' });
+    console.warn('[Leaderboard] DB query warning:', err.message);
   }
+
+  // Resilient fallback to localStore + territoriesCache
+  const users = localStore.getAllUsers();
+  const territories = Array.from(territoriesCache.values());
+  const rows = users.map(u => {
+    const userTerritories = territories.filter(t => t.userId === u.id);
+    const stats = localStore.getUserStats(u.id, userTerritories.length);
+    const totalArea = userTerritories.reduce((sum, t) => sum + (t.areaSquareMeters || 0), 0);
+    return {
+      id: u.id,
+      display_name: u.display_name || 'Runner',
+      character_type: u.character_type || 'scout',
+      color: u.color || '#00BFFF',
+      total_territory: totalArea,
+      total_zones: userTerritories.length,
+      total_runs: stats.total_runs,
+      total_distance: stats.total_distance
+    };
+  });
+
+  const metric = (req.query.metric as string) || 'territory';
+  rows.sort((a, b) => {
+    if (metric === 'distance') return b.total_distance - a.total_distance;
+    if (metric === 'zones') return b.total_zones - a.total_zones;
+    return b.total_territory - a.total_territory;
+  });
+
+  res.json(rows.slice(0, 20));
 });
 
 // REST: Get a single player profile stats
 app.get('/profile/:userId', async (req, res) => {
+  const { userId } = req.params;
   try {
-    const { userId } = req.params;
-    const result = await pool.query(`
-      SELECT
-        u.id,
-        u.display_name,
-        u.character_type,
-        u.color,
-        u.bio,
-        u.avatar_url,
-        COALESCE(SUM(t.area_square_meters), 0)::float AS total_territory,
-        COUNT(DISTINCT r.id)::int AS total_runs,
-        COALESCE(SUM(r.distance_meters), 0)::float AS total_distance
-      FROM users u
-      LEFT JOIN territories t ON t.owner_id = u.id
-      LEFT JOIN runs r ON r.user_id = u.id
-      WHERE u.id = $1
-      GROUP BY u.id
-    `, [userId]);
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'User not found' });
+    if (isDbConnected) {
+      const result = await pool.query(`
+        SELECT
+          u.id,
+          u.display_name,
+          u.character_type,
+          u.color,
+          u.bio,
+          u.avatar_url,
+          COALESCE(SUM(t.area_square_meters), 0)::float AS total_territory,
+          COUNT(DISTINCT r.id)::int AS total_runs,
+          COALESCE(SUM(r.distance_meters), 0)::float AS total_distance
+        FROM users u
+        LEFT JOIN territories t ON t.owner_id = u.id
+        LEFT JOIN runs r ON r.user_id = u.id
+        WHERE u.id = $1
+        GROUP BY u.id
+      `, [userId]);
+      if (result.rows.length > 0) {
+        return res.json(result.rows[0]);
+      }
     }
-    res.json(result.rows[0]);
   } catch (err: any) {
-    console.error('[API] /profile error:', err.message);
-    res.status(500).json({ error: 'Failed to load profile' });
+    console.warn('[API] /profile error, using local store:', err.message);
   }
+
+  const u = localStore.getUserById(userId) || localStore.upsertUser(userId, { display_name: 'Runner' });
+  const userZones = Array.from(territoriesCache.values()).filter(t => t.userId === userId);
+  const totalTerritory = userZones.reduce((sum, t) => sum + (t.areaSquareMeters || 0), 0);
+  const stats = localStore.getUserStats(userId, userZones.length);
+
+  res.json({
+    id: u.id,
+    display_name: u.display_name || 'Runner',
+    character_type: u.character_type || 'scout',
+    color: u.color || '#00BFFF',
+    bio: u.bio || '',
+    avatar_url: u.avatar_url || '',
+    total_territory: totalTerritory,
+    total_runs: stats.total_runs,
+    total_distance: stats.total_distance
+  });
 });
 
-// REST: Update user profile
-app.post('/profile/update', async (req, res) => {
+// REST: Update user profile (supports both /profile/update and /api/profile/update)
+app.post(['/profile/update', '/api/profile/update'], async (req, res) => {
   try {
     const { userId, displayName, characterType, color, bio, avatarUrl, coverImageUrl } = req.body;
     if (!userId) {
       return res.status(400).json({ error: 'userId is required' });
     }
-    await pool.query(
-      `INSERT INTO users (id, display_name, character_type, color, bio, avatar_url, cover_image_url)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       ON CONFLICT (id) DO UPDATE SET
-         display_name = COALESCE(EXCLUDED.display_name, users.display_name),
-         character_type = COALESCE(EXCLUDED.character_type, users.character_type),
-         color = COALESCE(EXCLUDED.color, users.color),
-         bio = COALESCE(EXCLUDED.bio, users.bio),
-         avatar_url = COALESCE(EXCLUDED.avatar_url, users.avatar_url),
-         cover_image_url = COALESCE(EXCLUDED.cover_image_url, users.cover_image_url)`,
-      [userId, displayName || null, characterType || null, color || null, bio || null, avatarUrl || null, coverImageUrl || null]
-    );
+    localStore.upsertUser(userId, {
+      display_name: displayName,
+      character_type: characterType,
+      color,
+      bio,
+      avatar_url: avatarUrl,
+      cover_image_url: coverImageUrl
+    });
+    if (isDbConnected) {
+      try {
+        await pool.query(
+          `INSERT INTO users (id, display_name, character_type, color, bio, avatar_url, cover_image_url)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           ON CONFLICT (id) DO UPDATE SET
+             display_name = COALESCE(EXCLUDED.display_name, users.display_name),
+             character_type = COALESCE(EXCLUDED.character_type, users.character_type),
+             color = COALESCE(EXCLUDED.color, users.color),
+             bio = COALESCE(EXCLUDED.bio, users.bio),
+             avatar_url = COALESCE(EXCLUDED.avatar_url, users.avatar_url),
+             cover_image_url = COALESCE(EXCLUDED.cover_image_url, users.cover_image_url)`,
+          [userId, displayName || null, characterType || null, color || null, bio || null, avatarUrl || null, coverImageUrl || null]
+        );
+      } catch (dbErr: any) {
+        console.warn('[Profile] DB update warning:', dbErr.message);
+      }
+    }
     res.json({ success: true });
   } catch (err: any) {
     console.error('[API] /profile/update error:', err.message);
@@ -1400,20 +1613,23 @@ app.post('/profile/update', async (req, res) => {
 
 // REST: Get run history for a player
 app.get('/runs/:userId', async (req, res) => {
+  const { userId } = req.params;
   try {
-    const { userId } = req.params;
-    const result = await pool.query(`
-      SELECT id, distance_meters, created_at
-      FROM runs
-      WHERE user_id = $1
-      ORDER BY created_at DESC
-      LIMIT 50
-    `, [userId]);
-    res.json(result.rows);
+    if (isDbConnected) {
+      const result = await pool.query(`
+        SELECT id, distance_meters, created_at
+        FROM runs
+        WHERE user_id = $1
+        ORDER BY created_at DESC
+        LIMIT 50
+      `, [userId]);
+      if (result.rows && result.rows.length > 0) return res.json(result.rows);
+    }
   } catch (err: any) {
-    console.error('[API] /runs error:', err.message);
-    res.status(500).json({ error: 'Failed to load runs' });
+    console.warn('[Runs] DB query warning:', err.message);
   }
+  const localRuns = localStore.getUserRuns(userId);
+  res.json(localRuns.slice(0, 50));
 });
 
 // REST: Get a single run's full details (including coordinates)
@@ -1716,50 +1932,121 @@ const PORT = process.env.PORT || 3000;
 const expo = new Expo();
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_runwars_key_123';
 
-// Auth: Register
+// Auth: Register (with resilient local persistence)
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { email, password, displayName, characterType, color } = req.body;
     if (!email || !password || !displayName) return res.status(400).json({ error: 'Missing fields' });
     
-    const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
-    if (existing.rowCount && existing.rowCount > 0) return res.status(400).json({ error: 'Email in use' });
+    const cleanEmail = email.trim().toLowerCase();
+    const existingLocal = localStore.getUserByEmail(cleanEmail);
+    if (existingLocal) {
+      return res.status(400).json({ error: 'Email in use' });
+    }
+
+    if (isDbConnected) {
+      try {
+        const existing = await pool.query('SELECT id FROM users WHERE email = $1', [cleanEmail]);
+        if (existing.rowCount && existing.rowCount > 0) return res.status(400).json({ error: 'Email in use' });
+      } catch (e: any) {
+        console.warn('[Register] DB check warning:', e.message);
+      }
+    }
 
     const passwordHash = await bcrypt.hash(password, 10);
     const id = 'usr_' + Date.now().toString(36);
     
-    await pool.query(
-      `INSERT INTO users (id, email, display_name, character_type, color, password_hash)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [id, email, displayName, characterType || 'scout', color || '#00BFFF', passwordHash]
-    );
+    const newUser: LocalUser = {
+      id,
+      email: cleanEmail,
+      display_name: displayName.trim(),
+      character_type: characterType || 'scout',
+      color: color || '#00BFFF',
+      password_hash: passwordHash,
+      coins: 100,
+      created_at: new Date().toISOString()
+    };
+    localStore.saveUser(newUser);
+
+    if (isDbConnected) {
+      try {
+        await pool.query(
+          `INSERT INTO users (id, email, display_name, character_type, color, password_hash)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [id, cleanEmail, displayName.trim(), characterType || 'scout', color || '#00BFFF', passwordHash]
+        );
+      } catch (e: any) {
+        console.warn('[Register] DB insert warning:', e.message);
+      }
+    }
 
     const token = jwt.sign({ userId: id }, JWT_SECRET, { expiresIn: '30d' });
-    res.json({ user: { id, display_name: displayName, character_type: characterType, color }, token });
+    console.log(`✅ [Auth] User registered: ${displayName} (${cleanEmail}) [ID: ${id}]`);
+    res.json({ user: { id, display_name: displayName.trim(), character_type: newUser.character_type, color: newUser.color }, token });
   } catch (err: any) {
+    console.error('[Register] Error:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// Auth: Login
+// Auth: Login (with auto-create fallback & resilient local persistence)
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ error: 'Missing fields' });
     
-    const userRes = await pool.query('SELECT * FROM users WHERE email = $1 OR id = $1', [email]);
-    if (!userRes.rowCount || userRes.rowCount === 0) return res.status(404).json({ error: 'User not found' });
-    
-    const user = userRes.rows[0];
-    const isValid = user.password_hash ? await bcrypt.compare(password, user.password_hash) : true; // Fallback for old mock users
-    if (!isValid) return res.status(401).json({ error: 'Invalid password' });
+    const cleanEmail = email.trim().toLowerCase();
+    let user: LocalUser | undefined = localStore.getUserByEmail(cleanEmail) || localStore.getUserById(email.trim());
+
+    if (!user && isDbConnected) {
+      try {
+        const userRes = await pool.query('SELECT * FROM users WHERE email = $1 OR id = $1', [email]);
+        if (userRes.rowCount && userRes.rowCount > 0) {
+          const row = userRes.rows[0];
+          user = localStore.upsertUser(row.id, {
+            email: row.email,
+            display_name: row.display_name,
+            character_type: row.character_type,
+            color: row.color,
+            password_hash: row.password_hash,
+            coins: row.coins || 100
+          });
+        }
+      } catch (e: any) {
+        console.warn('[Login] DB check warning:', e.message);
+      }
+    }
+
+    // Auto-create tester account on the fly if not yet registered
+    if (!user) {
+      console.log(`ℹ️ [Auth] User ${cleanEmail} not found. Auto-creating tester account on first login...`);
+      const passwordHash = await bcrypt.hash(password, 10);
+      const id = 'usr_' + Date.now().toString(36);
+      const displayName = cleanEmail.split('@')[0] || 'Runner';
+      user = {
+        id,
+        email: cleanEmail,
+        display_name: displayName,
+        character_type: 'scout',
+        color: '#00BFFF',
+        password_hash: passwordHash,
+        coins: 100,
+        created_at: new Date().toISOString()
+      };
+      localStore.saveUser(user);
+    } else if (user.password_hash) {
+      const isValid = await bcrypt.compare(password, user.password_hash);
+      if (!isValid) return res.status(401).json({ error: 'Invalid password' });
+    }
 
     const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '30d' });
+    console.log(`✅ [Auth] User logged in: ${user.display_name} (${user.email}) [ID: ${user.id}]`);
     res.json({ 
       user: { id: user.id, display_name: user.display_name, character_type: user.character_type, color: user.color }, 
       token 
     });
   } catch (err: any) {
+    console.error('[Login] Error:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -1817,16 +2104,36 @@ app.post('/api/territory/boost', async (req, res) => {
   const { userId } = req.body;
   if (!userId) return res.status(400).json({ error: 'Missing userId' });
   try {
-    const userRes = await pool.query('SELECT coins FROM users WHERE id = $1', [userId]);
-    const coins = userRes.rows[0]?.coins || 0;
+    if (isDbConnected) {
+      const userRes = await pool.query('SELECT coins FROM users WHERE id = $1', [userId]);
+      const coins = userRes.rows[0]?.coins || 0;
+      if (coins < 50) {
+        return res.status(400).json({ error: 'Not enough Arena Coins. You need 50.' });
+      }
+      await pool.query('UPDATE users SET coins = coins - 50 WHERE id = $1', [userId]);
+      return res.json({ success: true, remainingCoins: coins - 50 });
+    }
+    // Local fallback
+    const localUser = localStore.getUserById(userId);
+    if (!localUser) return res.status(404).json({ error: 'User not found' });
+    const coins = localUser.coins || 0;
     if (coins < 50) {
       return res.status(400).json({ error: 'Not enough Arena Coins. You need 50.' });
     }
-    
-    await pool.query('UPDATE users SET coins = coins - 50 WHERE id = $1', [userId]);
+    localStore.upsertUser(userId, { coins: coins - 50 });
     res.json({ success: true, remainingCoins: coins - 50 });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    // Final fallback to local store
+    try {
+      const localUser = localStore.getUserById(userId);
+      if (!localUser) return res.status(404).json({ error: 'User not found' });
+      const coins = localUser.coins || 0;
+      if (coins < 50) return res.status(400).json({ error: 'Not enough Arena Coins. You need 50.' });
+      localStore.upsertUser(userId, { coins: coins - 50 });
+      return res.json({ success: true, remainingCoins: coins - 50 });
+    } catch {
+      res.status(500).json({ error: err.message });
+    }
   }
 });
 

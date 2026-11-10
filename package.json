@@ -13,10 +13,11 @@
     "mobile": "npm run start --workspace=apps/mobile",
     "backend": "npm run dev --workspace=@runwars/backend",
     "dev": "concurrently \"npm run backend\" \"npm run mobile\"",
-    "website": "npx serve apps/website",
+    "website": "node serve-website.js",
     "build:shared": "npm run build --workspace=packages/shared",
     "build:backend": "npm run build:shared && npm run build --workspace=@runwars/backend",
     "start:backend": "npm run start --workspace=@runwars/backend",
+    "migrate:local": "npm run migrate:local --workspace=@runwars/backend --",
     "lint": "npm run lint --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },

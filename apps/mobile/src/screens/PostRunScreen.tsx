@@ -95,7 +95,7 @@ function formatTime(seconds: number): string {
   return `${s}s`;
 }
 
-const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.2.2:3000';
+import { apiFetch } from '@/config/api';
 
 export default function PostRunScreen() {
   const route = useRoute<PostRunRouteProp>();
@@ -152,14 +152,14 @@ export default function PostRunScreen() {
       if (viewShotRef.current && viewShotRef.current.capture) {
         b64 = await viewShotRef.current.capture({ format: 'jpg', quality: 0.5, result: 'base64' });
       }
-      const res = await fetch(`${API_URL}/api/posts`, {
+      const res = await apiFetch('/api/posts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userId: user.uid,
           content: postContent,
           imageUrl: b64 ? `data:image/jpeg;base64,${b64}` : undefined,
-        })
+        }),
       });
       if (res.ok) {
         setComposerVisible(false);
@@ -252,7 +252,7 @@ export default function PostRunScreen() {
 
               {/* Main distance hero */}
               <View style={styles.distanceHero}>
-                <AnimatedCounter target={parseFloat(distanceKm) * 100} suffix="" duration={1200} />
+                <AnimatedCounter target={Math.round(distanceMeters)} suffix="" duration={1200} />
                 <Text style={styles.distanceLabel}>METRES CONQUERED</Text>
               </View>
 

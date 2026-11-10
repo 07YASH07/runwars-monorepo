@@ -6,7 +6,7 @@
 
 // ─── Core User ────────────────────────────────────────────────────────────────
 
-export type CharacterType = 'warrior' | 'ninja' | 'mage' | 'scout';
+export type CharacterType = 'warrior' | 'ninja' | 'mage' | 'scout' | 'titan' | 'ghost';
 
 export interface User {
   id: string;
@@ -144,7 +144,9 @@ export const CHARACTER_EMOJI: Record<CharacterType, string> = {
   warrior: '⚔️',
   ninja: '🥷',
   mage: '🧙',
-  scout: '🏃',
+  scout: '⚡',
+  titan: '🛡️',
+  ghost: '👻',
 };
 
 export const CHARACTER_DESCRIPTIONS: Record<CharacterType, string> = {
@@ -152,6 +154,8 @@ export const CHARACTER_DESCRIPTIONS: Record<CharacterType, string> = {
   ninja: 'Swift and silent. Masters of stealth running at night.',
   mage: 'Arcane and mysterious. Leaves glowing trails on the map.',
   scout: 'Fast and agile. Explores new zones faster than anyone.',
+  titan: 'Immovable rock. Fortifies territories so rivals struggle to overtake.',
+  ghost: 'Silent phantom. Masks trajectory until the territory is locked.',
 };
 
 // ─── Color Palette ────────────────────────────────────────────────────────────
