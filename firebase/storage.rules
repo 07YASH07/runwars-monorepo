@@ -1,0 +1,38 @@
+rules_version = '2';
+
+// StrideClash Firebase Storage rules.
+//
+// Every signed-in app user has a Firebase Auth session whose uid equals their
+// StrideClash user id (Google sign-in directly; email/password users via a
+// backend-issued custom token). Uploads are therefore restricted to the
+// caller's own folder.
+//
+// Deploy:  firebase deploy --only storage   (from the repo root, see firebase.json)
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    function isValidImage() {
+      return request.resource != null
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/(jpeg|jpg|png|webp|heic|heif)');
+    }
+
+    // post-images/{uid}/{file}, avatar-images/{uid}/{file}, cover-images/{uid}/{file}
+    match /{kind}/{userId}/{fileName} {
+      allow read: if kind in ['post-images', 'avatar-images', 'cover-images'];
+      allow create, update: if kind in ['post-images', 'avatar-images', 'cover-images']
+        && isOwner(userId) && isValidImage();
+      allow delete: if kind in ['post-images', 'avatar-images', 'cover-images'] && isOwner(userId);
+    }
+
+    // Everything else is closed.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

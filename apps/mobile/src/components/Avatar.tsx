@@ -24,7 +24,7 @@ export default function Avatar({
   avatarUrl,
   selectedAvatar,
   characterType,
-  color = '#00BFFF',
+  color = '#38BDF8',
   size = 44,
   style,
 }: AvatarProps) {
@@ -75,7 +75,7 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#0D0D1A',
+    backgroundColor: '#0B1220',
     overflow: 'hidden',
   },
 });

@@ -33,6 +33,10 @@ export type PostRunParams = {
   color: string;
   routePoints: GeoPoint[];
   activityType?: 'run' | 'walk' | 'bike';
+  /** 'synced' = confirmed by the server; 'queued' = stored offline, will upload later. */
+  syncStatus?: 'synced' | 'queued';
+  claimStatus?: 'claimed' | 'rejected' | 'lost' | null;
+  claimReason?: string | null;
 };
 
 type PostRunRouteProp = RouteProp<{ PostRun: PostRunParams }, 'PostRun'>;
@@ -80,9 +84,9 @@ const rowStyles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: '#2A2A4A',
+    borderBottomColor: '#29384F',
   },
-  label: { color: '#4A4A6A', fontSize: 13, fontWeight: '700', letterSpacing: 1 },
+  label: { color: '#64748B', fontSize: 13, fontWeight: '700', letterSpacing: 1 },
   value: { color: '#FFFFFF', fontSize: 16, fontWeight: '800' },
 });
 
@@ -95,17 +99,29 @@ function formatTime(seconds: number): string {
   return `${s}s`;
 }
 
-import { apiFetch } from '@/config/api';
+import { apiFetch, errorMessage } from '@/config/api';
+import { uploadPostImage } from '@/services/ImageUploadService';
 
 export default function PostRunScreen() {
   const route = useRoute<PostRunRouteProp>();
   const navigation = useNavigation();
   const { user } = useAuth();
 
-  const { distanceMeters, elapsedSeconds, averageSpeedKmh, areaSquareMeters, color, routePoints, activityType } = route.params;
+  const { distanceMeters, elapsedSeconds, averageSpeedKmh, areaSquareMeters, color, routePoints, activityType, syncStatus, claimStatus, claimReason } = route.params;
 
-  const xp = Math.round((distanceMeters / 100) + (areaSquareMeters / 500));
   const distanceKm = (distanceMeters / 1000).toFixed(2);
+  const synced = syncStatus === 'synced';
+  // Coins the server actually awards (see recordRun / processTerritoryClaim).
+  const coinsEarned = synced ? (distanceMeters > 0 ? 50 : 0) + (claimStatus === 'claimed' ? 10 : 0) : 0;
+  const statusLine = !synced
+    ? 'Saved on this phone — will upload when online'
+    : claimStatus === 'claimed'
+    ? 'Activity saved · territory claimed'
+    : claimStatus === 'lost'
+    ? 'Activity saved · a stronger runner holds this ground'
+    : claimStatus === 'rejected'
+    ? 'Activity saved · territory not claimed'
+    : 'Activity saved';
 
   // Fade + slide in animation
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -114,7 +130,12 @@ export default function PostRunScreen() {
   const viewShotRef = useRef<any>(null);
 
   const [composerVisible, setComposerVisible] = React.useState(false);
-  const [postContent, setPostContent] = React.useState(`Just completed a ${distanceKm}km run and claimed ${areaSquareMeters.toFixed(0)}m² of territory in StrideClash! 🏃‍♂️💨`);
+  const [postContent, setPostContent] = React.useState(
+    claimStatus === 'claimed'
+      ? `Just completed a ${distanceKm} km ${activityType === 'bike' ? 'ride' : activityType || 'run'} and claimed ${Math.round(areaSquareMeters).toLocaleString()} m² of territory in StrideClash!`
+      : `Just completed a ${distanceKm} km ${activityType === 'bike' ? 'ride' : activityType || 'run'} in StrideClash!`
+  );
+  const [uploadProgress, setUploadProgress] = React.useState<number | null>(null);
   const [submittingPost, setSubmittingPost] = React.useState(false);
 
   useEffect(() => {
@@ -122,8 +143,8 @@ export default function PostRunScreen() {
       Animated.timing(fadeAnim, { toValue: 1, duration: 500, useNativeDriver: true }),
       Animated.spring(slideAnim, { toValue: 0, tension: 80, friction: 10, useNativeDriver: true }),
     ]).start(() => {
-      // Auto-prompt composer after a short delay
-      setTimeout(() => setComposerVisible(true), 800);
+      // Only suggest sharing when the run is actually on the server.
+      if (synced) setTimeout(() => setComposerVisible(true), 800);
     });
   }, []);
 
@@ -148,28 +169,36 @@ export default function PostRunScreen() {
     if (!user) return;
     setSubmittingPost(true);
     try {
-      let b64 = '';
-      if (viewShotRef.current && viewShotRef.current.capture) {
-        b64 = await viewShotRef.current.capture({ format: 'jpg', quality: 0.5, result: 'base64' });
+      let imageUrl: string | undefined;
+      if (viewShotRef.current?.capture) {
+        try {
+          const uri = await viewShotRef.current.capture({ format: 'jpg', quality: 0.8, result: 'tmpfile' });
+          setUploadProgress(0);
+          const up = await uploadPostImage({ uri, mimeType: 'image/jpeg' }, { userId: user.uid, kind: 'post', onProgress: setUploadProgress });
+          imageUrl = up.url;
+        } catch (e: any) {
+          // Photo upload unavailable → still allow a text post, but say so.
+          const proceed = await new Promise<boolean>(resolve =>
+            Alert.alert('Image not attached', (e?.message || 'The run card could not be uploaded.') + '\n\nPost without the image?', [
+              { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+              { text: 'Post text', onPress: () => resolve(true) },
+            ])
+          );
+          if (!proceed) return;
+        } finally {
+          setUploadProgress(null);
+        }
       }
       const res = await apiFetch('/api/posts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: user.uid,
-          content: postContent,
-          imageUrl: b64 ? `data:image/jpeg;base64,${b64}` : undefined,
-        }),
+        body: JSON.stringify({ content: postContent, imageUrl }),
       });
-      if (res.ok) {
-        setComposerVisible(false);
-        Alert.alert('Posted!', 'Your run has been shared to the Social Feed.');
-      } else {
-        throw new Error('Failed to post');
-      }
-    } catch (err) {
-      console.error(err);
-      Alert.alert('Error', 'Failed to publish post.');
+      if (!res.ok) throw new Error(await errorMessage(res, 'Failed to publish post.'));
+      setComposerVisible(false);
+      Alert.alert('Posted', 'Your activity is now in the Community feed.');
+    } catch (err: any) {
+      Alert.alert('Could not post', err?.message || 'Failed to publish post.');
     } finally {
       setSubmittingPost(false);
     }
@@ -205,12 +234,12 @@ export default function PostRunScreen() {
         <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}>
 
           <ViewShot ref={viewShotRef} options={{ format: 'jpg', quality: 1.0 }}>
-            <View style={{ backgroundColor: '#1A1A2E', borderRadius: 20, margin: 10, overflow: 'hidden', borderWidth: 2, borderColor: color }}>
+            <View style={{ backgroundColor: '#101B2D', borderRadius: 20, margin: 10, overflow: 'hidden', borderWidth: 2, borderColor: color }}>
               {/* Header */}
               <View style={[styles.header, { borderBottomColor: color }]}>
                 <Text style={styles.headerEmoji}>{emoji}</Text>
                 <Text style={styles.headerTitle}>{activityText}</Text>
-                <Text style={[styles.headerSub, { color }]}>Territory claimed & saved 🗺️</Text>
+                <Text style={[styles.headerSub, { color }]}>{statusLine}</Text>
               </View>
 
               {/* Map Snapshot */}
@@ -256,19 +285,22 @@ export default function PostRunScreen() {
                 <Text style={styles.distanceLabel}>METRES CONQUERED</Text>
               </View>
 
-              {/* XP gained */}
-              <View style={[styles.xpBanner, { backgroundColor: color + '22', borderColor: color + '55' }]}>
-                <Text style={styles.xpIcon}>⚡</Text>
-                <Text style={[styles.xpText, { color }]}>+</Text>
-                <AnimatedCounter target={xp} duration={2000} />
-                <Text style={[styles.xpText, { color }]}> XP</Text>
-              </View>
+              {/* Coins actually awarded by the server */}
+              {coinsEarned > 0 && (
+                <View style={[styles.xpBanner, { backgroundColor: color + '22', borderColor: color + '55' }]}>
+                  <Text style={styles.xpIcon}>🪙</Text>
+                  <Text style={[styles.xpText, { color }]}>+</Text>
+                  <AnimatedCounter target={coinsEarned} duration={1200} />
+                  <Text style={[styles.xpText, { color }]}> coins</Text>
+                </View>
+              )}
+              {!!claimReason && <Text style={styles.claimReason}>{claimReason}</Text>}
 
               {/* Stats breakdown */}
               <View style={styles.statsCard}>
                 <StatRow label="⏱  DURATION" value={formatTime(elapsedSeconds)} />
                 <StatRow label="⚡  AVG SPEED" value={`${averageSpeedKmh.toFixed(1)} km/h`} />
-                <StatRow label="🗺️  TERRITORY" value={`${areaSquareMeters.toFixed(0)} m²`} />
+                <StatRow label="🗺️  TERRITORY" value={claimStatus === 'claimed' ? `${Math.round(areaSquareMeters).toLocaleString()} m²` : synced ? 'Not claimed' : 'Pending upload'} />
                 <StatRow label="📏  DISTANCE" value={`${distanceKm} km`} />
               </View>
             </View>
@@ -285,21 +317,14 @@ export default function PostRunScreen() {
 
           {/* Actions */}
           <View style={styles.actionRow}>
-            <TouchableOpacity
-              style={[styles.shareBtn, { backgroundColor: '#E1306C' }]}
-              onPress={shareImage}
-              activeOpacity={0.85}
-            >
-              <Text style={styles.shareBtnText}>📸  INSTAGRAM</Text>
+            <TouchableOpacity style={[styles.shareBtn, { backgroundColor: '#1D2B42' }]} onPress={shareImage} activeOpacity={0.85} testID="postrun-share">
+              <Text style={styles.shareBtnText}>📤  Share image</Text>
             </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.shareBtn, { backgroundColor: '#25D366' }]}
-              onPress={shareImage}
-              activeOpacity={0.85}
-            >
-              <Text style={styles.shareBtnText}>💬  WHATSAPP</Text>
-            </TouchableOpacity>
+            {synced && (
+              <TouchableOpacity style={[styles.shareBtn, { backgroundColor: '#1D2B42' }]} onPress={() => setComposerVisible(true)} activeOpacity={0.85} testID="postrun-post">
+                <Text style={styles.shareBtnText}>📣  Post to feed</Text>
+              </TouchableOpacity>
+            )}
           </View>
 
           <TouchableOpacity
@@ -343,7 +368,7 @@ export default function PostRunScreen() {
               onPress={handlePost}
             >
               {submittingPost ? (
-                <ActivityIndicator color="#0D0D1A" />
+                uploadProgress !== null ? <Text style={styles.publishText}>Uploading {Math.round(uploadProgress * 100)}%</Text> : <ActivityIndicator color="#0B1220" />
               ) : (
                 <Text style={styles.publishText}>Publish Post</Text>
               )}
@@ -357,7 +382,7 @@ export default function PostRunScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0D0D1A' },
+  container: { flex: 1, backgroundColor: '#0B1220' },
   scroll: { paddingBottom: 60 },
 
   header: {
@@ -365,7 +390,7 @@ const styles = StyleSheet.create({
     paddingTop: 70,
     paddingBottom: 32,
     paddingHorizontal: 24,
-    backgroundColor: '#16162A',
+    backgroundColor: '#162238',
     borderBottomWidth: 3,
     marginBottom: 0,
   },
@@ -381,18 +406,19 @@ const styles = StyleSheet.create({
   distanceHero: {
     alignItems: 'center',
     paddingVertical: 40,
-    backgroundColor: '#16162A',
+    backgroundColor: '#162238',
     borderBottomWidth: 1,
-    borderBottomColor: '#2A2A4A',
+    borderBottomColor: '#29384F',
   },
   distanceLabel: {
     fontSize: 11,
     fontWeight: '900',
-    color: '#4A4A6A',
+    color: '#64748B',
     letterSpacing: 3,
     marginTop: 8,
   },
 
+  claimReason: { color: '#94A3B8', fontSize: 13, textAlign: 'center', marginHorizontal: 16, marginBottom: 8 },
   xpBanner: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -410,7 +436,7 @@ const styles = StyleSheet.create({
   statsCard: {
     marginHorizontal: 24,
     marginTop: 20,
-    backgroundColor: '#16162A',
+    backgroundColor: '#162238',
     borderRadius: 16,
     paddingHorizontal: 20,
     paddingTop: 4,
@@ -418,7 +444,7 @@ const styles = StyleSheet.create({
 
   motivation: {
     textAlign: 'center',
-    color: '#4A4A6A',
+    color: '#64748B',
     fontSize: 14,
     marginHorizontal: 24,
     marginTop: 24,
@@ -434,7 +460,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     position: 'relative',
     borderWidth: 2,
-    borderColor: '#2A2A4A',
+    borderColor: '#29384F',
   },
   map: {
     ...StyleSheet.absoluteFill,
@@ -455,7 +481,7 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
   },
   territoryLabel: {
-    backgroundColor: '#0D0D1A',
+    backgroundColor: '#0B1220',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 8,
@@ -506,18 +532,18 @@ const styles = StyleSheet.create({
     elevation: 10,
   },
   doneBtnText: {
-    color: '#0D0D1A',
+    color: '#0B1220',
     fontSize: 15,
     fontWeight: '900',
     letterSpacing: 1.5,
   },
   modalOverlay: { flex: 1, backgroundColor: '#000000AA', justifyContent: 'center', alignItems: 'center' },
-  composerCard: { width: '90%', backgroundColor: '#16162A', borderRadius: 16, borderWidth: 1.5, borderColor: '#00BFFF44', padding: 20, gap: 16 },
+  composerCard: { width: '90%', backgroundColor: '#162238', borderRadius: 16, borderWidth: 1.5, borderColor: '#00BFFF44', padding: 20, gap: 16 },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   modalTitle: { fontSize: 18, fontWeight: '900', color: '#FFFFFF' },
-  closeText: { color: '#8A8AAB', fontWeight: '700' },
-  composerInput: { backgroundColor: '#0D0D1A', borderRadius: 8, color: '#FFFFFF', padding: 12, fontSize: 14, height: 100, textAlignVertical: 'top', borderWidth: 1, borderColor: '#2A2A4A' },
-  publishBtn: { backgroundColor: '#00BFFF', paddingVertical: 12, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  publishBtnDisabled: { backgroundColor: '#4A4A6A', opacity: 0.5 },
-  publishText: { color: '#0D0D1A', fontWeight: '900', fontSize: 14 },
+  closeText: { color: '#94A3B8', fontWeight: '700' },
+  composerInput: { backgroundColor: '#0B1220', borderRadius: 8, color: '#FFFFFF', padding: 12, fontSize: 14, height: 100, textAlignVertical: 'top', borderWidth: 1, borderColor: '#29384F' },
+  publishBtn: { backgroundColor: '#38BDF8', paddingVertical: 12, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  publishBtnDisabled: { backgroundColor: '#64748B', opacity: 0.5 },
+  publishText: { color: '#0B1220', fontWeight: '900', fontSize: 14 },
 });

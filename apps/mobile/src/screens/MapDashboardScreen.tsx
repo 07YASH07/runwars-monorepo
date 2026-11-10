@@ -159,9 +159,9 @@ export default function MapDashboardScreen() {
       });
     };
 
-    socketService.socket?.on('territory:stolen', onStolen);
+    socketService.onEvent('territory:stolen', onStolen);
     return () => {
-      socketService.socket?.off('territory:stolen', onStolen);
+      socketService.offEvent('territory:stolen', onStolen);
     };
   }, [fetchStats, user?.uid, socketService]);
 
@@ -206,7 +206,7 @@ export default function MapDashboardScreen() {
   };
 
   const handleViewBattles = () => {
-    navigation.navigate('BATTLES');
+    navigation.navigate('COMPETE');
   };
 
   return (
@@ -241,7 +241,7 @@ export default function MapDashboardScreen() {
 
           const isMine = t.userId === user?.uid;
           const strokeColor = isMine ? (user?.color || COLORS.neonGreen) : (t.color || COLORS.crimson);
-          const fillColor = isMine ? 'rgba(0, 255, 136, 0.28)' : 'rgba(255, 42, 85, 0.22)';
+          const fillColor = isMine ? 'rgba(34, 197, 94, 0.28)' : 'rgba(239, 68, 68, 0.22)';
 
           return (
             <Polygon
@@ -467,7 +467,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 12,
     marginBottom: SPACING.sm,
-    backgroundColor: 'rgba(16, 16, 32, 0.90)',
+    backgroundColor: 'rgba(16, 27, 45, 0.90)',
   },
   statsRow: {
     flexDirection: 'row',
@@ -506,7 +506,7 @@ const styles = StyleSheet.create({
     width: 48,
     height: 48,
     borderRadius: 24,
-    backgroundColor: 'rgba(16, 16, 32, 0.92)',
+    backgroundColor: 'rgba(16, 27, 45, 0.92)',
     borderWidth: 1.5,
     borderColor: COLORS.borderMedium,
     alignItems: 'center',
@@ -521,7 +521,7 @@ const styles = StyleSheet.create({
     marginLeft: 12,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(16, 16, 32, 0.92)',
+    backgroundColor: 'rgba(16, 27, 45, 0.92)',
     borderWidth: 1.2,
     borderColor: 'rgba(157, 0, 255, 0.4)',
     borderRadius: RADII.md,
@@ -555,7 +555,7 @@ const styles = StyleSheet.create({
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: '#16162D',
+    backgroundColor: '#162238',
     borderWidth: 2.5,
     alignItems: 'center',
     justifyContent: 'center',

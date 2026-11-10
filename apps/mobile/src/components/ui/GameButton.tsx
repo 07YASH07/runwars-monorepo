@@ -75,7 +75,7 @@ export const GameButton: React.FC<GameButtonProps> = ({
       case 'secondary':
         return {
           btn: {
-            backgroundColor: 'rgba(0, 191, 255, 0.12)',
+            backgroundColor: 'rgba(56, 189, 248, 0.12)',
             borderWidth: 1.5,
             borderColor: COLORS.electricBlue,
             ...SHADOWS.blueGlow,
@@ -104,7 +104,7 @@ export const GameButton: React.FC<GameButtonProps> = ({
             shadowRadius: 8,
             elevation: 6,
           },
-          text: { color: '#080811' },
+          text: { color: '#0B1220' },
         };
       case 'ghost':
         return {
@@ -124,7 +124,7 @@ export const GameButton: React.FC<GameButtonProps> = ({
             borderColor: '#80FFA8',
             ...SHADOWS.neonGlow,
           },
-          text: { color: '#080811' },
+          text: { color: '#0B1220' },
         };
     }
   };
@@ -171,7 +171,7 @@ export const GameButton: React.FC<GameButtonProps> = ({
       >
         {isLoading ? (
           <ActivityIndicator
-            color={variant === 'primary' || variant === 'warning' ? '#080811' : '#FFFFFF'}
+            color={variant === 'primary' || variant === 'warning' ? '#0B1220' : '#FFFFFF'}
             size="small"
           />
         ) : (

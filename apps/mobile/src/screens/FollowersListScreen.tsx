@@ -108,7 +108,7 @@ export default function FollowersListScreen() {
       const res = await apiFetch(path, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: user.uid, followingId: target.id }),
+        body: JSON.stringify({ followingId: target.id }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -210,7 +210,11 @@ export default function FollowersListScreen() {
               <TouchableOpacity
                 style={[styles.row, { borderColor: color + '44' }]}
                 activeOpacity={0.85}
-                onPress={() => openProfile(item.id)}
+                onPress={() => {
+                  if (item.id === user?.uid) { navigation.goBack(); navigation.navigate('PROFILE'); }
+                  else navigation.push('UserProfile', { userId: item.id });
+                }}
+                onLongPress={() => openProfile(item.id)}
                 testID={`followers-row-${item.id}`}
               >
                 <View style={[styles.avatar, { borderColor: color, backgroundColor: color + '14' }]}>
@@ -314,12 +318,12 @@ const styles = StyleSheet.create({
     padding: 4,
     margin: SPACING.md,
     borderRadius: RADII.pill,
-    backgroundColor: 'rgba(16,16,32,0.9)',
+    backgroundColor: 'rgba(16, 27, 45,0.9)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.1)',
   },
   segBtn: { flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: RADII.pill },
-  segBtnActive: { backgroundColor: 'rgba(0,255,136,0.18)' },
+  segBtnActive: { backgroundColor: 'rgba(34, 197, 94,0.18)' },
   segText: { color: COLORS.textMuted, fontSize: 11, fontWeight: '900', letterSpacing: 1 },
   segTextActive: { color: COLORS.neonGreen },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: SPACING.lg },
@@ -330,7 +334,7 @@ const styles = StyleSheet.create({
     padding: SPACING.sm,
     marginBottom: 8,
     borderRadius: RADII.md,
-    backgroundColor: 'rgba(16,16,32,0.9)',
+    backgroundColor: 'rgba(16, 27, 45,0.9)',
     borderWidth: 1,
   },
   avatar: {
@@ -354,16 +358,16 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.neonGreen,
   },
-  followBtnText: { color: '#080811', fontSize: 11, fontWeight: '900', letterSpacing: 0.8 },
+  followBtnText: { color: '#0B1220', fontSize: 11, fontWeight: '900', letterSpacing: 0.8 },
   followBtnTextActive: { color: COLORS.neonGreen },
   modalOverlay: { flex: 1, backgroundColor: '#000000AA', justifyContent: 'center', alignItems: 'center' },
   card: {
     width: '80%', padding: 24, alignItems: 'center', borderRadius: 16, borderWidth: 1.5,
-    borderColor: COLORS.electricBlue, backgroundColor: '#16162A',
+    borderColor: COLORS.electricBlue, backgroundColor: '#162238',
   },
   cardAvatar: {
     width: 76, height: 76, borderRadius: 38, borderWidth: 3, marginBottom: 12,
-    alignItems: 'center', justifyContent: 'center', backgroundColor: '#0D0D1A',
+    alignItems: 'center', justifyContent: 'center', backgroundColor: '#0B1220',
   },
   cardName: { color: '#FFFFFF', fontSize: 18, fontWeight: '900' },
   cardClass: { fontSize: 11, fontWeight: '900', marginTop: 4 },

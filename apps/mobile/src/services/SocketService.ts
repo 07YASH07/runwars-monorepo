@@ -1,78 +1,75 @@
+/**
+ * SocketService — one authenticated Socket.IO connection to the remote backend.
+ *
+ * - Uses socket.io's built-in reconnection, so the Socket object (and every
+ *   listener registered on it) survives network drops.
+ * - Sends the backend JWT in the handshake; the server derives identity from
+ *   it (client-sent userIds are ignored).
+ * - Listeners registered through onEvent() are kept in a registry and
+ *   re-attached if the socket is ever recreated (e.g. after logout/login).
+ */
 import { io, Socket } from 'socket.io-client';
 import {
   PlayerJoinPayload,
   LocationUpdatePayload,
   RunStartPayload,
-  RunStopPayload,
-  TerritoryClaimPayload,
 } from '@runwars/shared';
-import { CANDIDATE_API_URLS } from '@/config/api';
+import { SOCKET_URL, getAuthToken } from '@/config/api';
+
+type Listener = (...args: any[]) => void;
 
 class SocketService {
   public socket: Socket | null = null;
   public userId: string | null = null;
-  private currentUrlIndex = 0;
   private lastJoinPayload: PlayerJoinPayload | null = null;
+  private listeners = new Map<string, Set<Listener>>();
 
   connect(userId: string, displayName: string, characterType: string, color: string) {
     this.userId = userId;
-    this.lastJoinPayload = {
-      userId,
-      displayName,
-      characterType: characterType as any,
-      color,
-    };
-    if (this.socket?.connected) return;
+    this.lastJoinPayload = { userId, displayName, characterType: characterType as any, color };
 
-    this.attemptConnect();
-  }
-
-  private attemptConnect() {
     if (this.socket) {
-      try { this.socket.disconnect(); } catch (e) {}
+      // Already created: (re)join with fresh profile data if connected.
+      if (this.socket.connected) this.socket.emit('playerJoin', this.lastJoinPayload);
+      else this.socket.connect();
+      return;
     }
 
-    const targetUrl = CANDIDATE_API_URLS[this.currentUrlIndex % CANDIDATE_API_URLS.length];
-    console.log(`[Socket] Connecting to ${targetUrl}...`);
-
-    this.socket = io(targetUrl, {
+    const socket = io(SOCKET_URL, {
       transports: ['websocket'],
-      timeout: 6000,
-      extraHeaders: {
-        'Bypass-Tunnel-Reminder': 'true'
-      }
+      timeout: 20000,
+      reconnection: true,
+      reconnectionDelay: 2000,
+      reconnectionDelayMax: 15000,
+      // Evaluated on every (re)connect so a refreshed token is always used.
+      auth: (cb) => cb({ token: getAuthToken() }),
     });
 
-    this.socket.on('connect', () => {
-      console.log(`[Socket] Connected to backend at ${targetUrl}`);
-      if (this.lastJoinPayload) {
-        this.socket?.emit('playerJoin', this.lastJoinPayload);
-      }
+    socket.on('connect', () => {
+      console.log('[Socket] connected');
+      if (this.lastJoinPayload) socket.emit('playerJoin', this.lastJoinPayload);
     });
+    socket.on('disconnect', (reason) => console.log('[Socket] disconnected:', reason));
+    socket.on('connect_error', (err) => console.warn('[Socket] connect error:', err.message));
+    socket.on('auth:error', (e) => console.warn('[Socket] auth error:', e?.event, e?.code));
 
-    this.socket.on('disconnect', () => {
-      console.log('[Socket] Disconnected from backend');
-    });
-
-    this.socket.on('connect_error', (err) => {
-      console.warn(`[Socket] Error on ${targetUrl}:`, err.message);
-      // Try next candidate url after 3 seconds
-      if (CANDIDATE_API_URLS.length > 1) {
-        this.currentUrlIndex++;
-        setTimeout(() => {
-          if (!this.socket?.connected) {
-            this.attemptConnect();
-          }
-        }, 3000);
-      }
-    });
+    for (const [event, set] of this.listeners) for (const cb of set) socket.on(event, cb);
+    this.socket = socket;
   }
 
+  /** Full teardown (logout): drops identity and the connection. */
   disconnect() {
+    this.lastJoinPayload = null;
+    this.userId = null;
     if (this.socket) {
+      this.socket.removeAllListeners();
       this.socket.disconnect();
       this.socket = null;
     }
+  }
+
+  get connected(): boolean {
+    return !!this.socket?.connected;
   }
 
   emitLocationUpdate(payload: LocationUpdatePayload) {
@@ -83,21 +80,20 @@ class SocketService {
     this.socket?.emit('runStart', payload);
   }
 
-  emitRunStop(payload: RunStopPayload) {
-    this.socket?.emit('runStop', payload);
-  }
-
-  emitTerritoryClaim(payload: TerritoryClaimPayload & { polygonCoordinates: any[], areaSquareMeters: number, color: string }) {
-    this.socket?.emit('territoryClaim', payload);
-  }
-
-  // Generic subscriber
-  onEvent(event: string, callback: (...args: any[]) => void) {
+  onEvent(event: string, callback: Listener) {
+    if (!this.listeners.has(event)) this.listeners.set(event, new Set());
+    this.listeners.get(event)!.add(callback);
     this.socket?.on(event, callback);
   }
 
-  offEvent(event: string, callback?: (...args: any[]) => void) {
-    this.socket?.off(event, callback);
+  offEvent(event: string, callback?: Listener) {
+    if (callback) {
+      this.listeners.get(event)?.delete(callback);
+      this.socket?.off(event, callback);
+    } else {
+      this.listeners.delete(event);
+      this.socket?.off(event);
+    }
   }
 }
 

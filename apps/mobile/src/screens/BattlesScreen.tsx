@@ -8,7 +8,7 @@
  * - Real territory records from `useMultiplayer().territories`
  * - Live rival players from `useMultiplayer().livePlayers`
  * - Active invasion warnings from Socket.IO events (`territory:stolen`, `pvp:warning`)
- * - Territory boost API (`/api/territory/boost`)
+ * - Battle results from Socket.IO `conflict:resolved` (server-decided)
  */
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
@@ -46,10 +46,10 @@ type BattleTab = 'contested' | 'mySectors' | 'history';
 
 interface BattleEvent {
   id: string;
-  type: 'defense' | 'stolen' | 'challenge';
+  type: 'defense' | 'stolen' | 'won' | 'lost';
   playerName: string;
   playerColor: string;
-  areaSqm: number;
+  areaSqm: number | null;
   timestamp: string;
 }
 
@@ -63,26 +63,41 @@ export default function BattlesScreen() {
   const [battleHistory, setBattleHistory] = useState<BattleEvent[]>([]);
   const [activeInvasions, setActiveInvasions] = useState<BattleEvent[]>([]);
 
-  // Listen for real battle events
+  // Real battle events from the server (kept for this app session).
   useEffect(() => {
+    const now = () => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const onStolen = (data: { byPlayerName: string; byPlayerColor: string; area?: number }) => {
       const evt: BattleEvent = {
         id: 'stolen_' + Date.now(),
         type: 'stolen',
-        playerName: data.byPlayerName || 'Rival Runner',
+        playerName: data.byPlayerName || 'Rival runner',
         playerColor: data.byPlayerColor || COLORS.crimson,
-        areaSqm: data.area || 1200,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        areaSqm: typeof data.area === 'number' ? data.area : null,
+        timestamp: now(),
       };
       setActiveInvasions((prev) => [evt, ...prev]);
-      setBattleHistory((prev) => [evt, ...prev]);
     };
-
-    socketService.socket?.on('territory:stolen', onStolen);
+    const onResolved = (r: { winnerId: string; loserId: string; winnerDistance: number; loserDistance: number }) => {
+      if (!user?.uid || (r.winnerId !== user.uid && r.loserId !== user.uid)) return;
+      const won = r.winnerId === user.uid;
+      const rivalId = won ? r.loserId : r.winnerId;
+      const rival = livePlayers.find(p => p.userId === rivalId);
+      setBattleHistory((prev) => [{
+        id: 'battle_' + Date.now(),
+        type: won ? 'won' : 'lost',
+        playerName: rival?.displayName || 'Rival runner',
+        playerColor: rival?.color || COLORS.crimson,
+        areaSqm: null,
+        timestamp: now(),
+      }, ...prev]);
+    };
+    socketService.onEvent('territory:stolen', onStolen);
+    socketService.onEvent('conflict:resolved', onResolved);
     return () => {
-      socketService.socket?.off('territory:stolen', onStolen);
+      socketService.offEvent('territory:stolen', onStolen);
+      socketService.offEvent('conflict:resolved', onResolved);
     };
-  }, [socketService]);
+  }, [socketService, user?.uid, livePlayers]);
 
   // Split territories into My Sectors vs Rival Sectors
   const myTerritories = useMemo(() => {
@@ -103,8 +118,8 @@ export default function BattlesScreen() {
 
   const handleChallenge = (territory: any) => {
     Alert.alert(
-      'CHALLENGE SECTOR',
-      `Target Sector: ${Math.round(territory.areaSquareMeters || 500).toLocaleString()} m²\nOwner: ${territory.ownerName || 'Rival'}\n\nStart a run now to overtake this territory?`,
+      'Challenge territory',
+      `${Math.round(territory.areaSquareMeters || 0).toLocaleString()} m² held by ${territory.ownerName || 'a rival'}.\n\nRun through it to contest it — the runner with more total distance wins.`,
       [
         { text: 'CANCEL', style: 'cancel' },
         {
@@ -118,28 +133,10 @@ export default function BattlesScreen() {
     );
   };
 
-  const handleActivateBoost = async () => {
-    try {
-      const res = await apiFetch('/api/territory/boost', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: user?.uid }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        Alert.alert('⚡ 2X ARENA BOOST ACTIVE', `Capture speed doubled! Remaining Arena Coins: ${data.remainingCoins}`);
-      } else {
-        Alert.alert('Boost Failed', data.error || 'Insufficient Arena Coins.');
-      }
-    } catch (e) {
-      Alert.alert('Network Error', 'Could not activate boost.');
-    }
-  };
-
   const renderRivalItem = ({ item }: { item: any }) => {
     const area = Math.round(item.areaSquareMeters || 0);
     const dateStr = item.claimedAt ? new Date(item.claimedAt).toLocaleDateString() : 'Active';
-    const ownerSpeed = item.avgSpeedKmh ? `${item.avgSpeedKmh.toFixed(1)} km/h` : '10.5 km/h';
+    const ownerSpeed = item.avgSpeedKmh ? `${item.avgSpeedKmh.toFixed(1)} km/h` : '—';
 
     return (
       <GlassCard style={styles.battleCard} variant="crimsonBorder" glow={false}>
@@ -200,7 +197,7 @@ export default function BattlesScreen() {
             </View>
           </View>
 
-          <View style={[styles.areaBadge, { backgroundColor: 'rgba(0, 255, 136, 0.15)', borderColor: COLORS.neonGreen }]}>
+          <View style={[styles.areaBadge, { backgroundColor: 'rgba(34, 197, 94, 0.15)', borderColor: COLORS.neonGreen }]}>
             <Text style={[styles.areaBadgeText, { color: COLORS.neonGreen }]}>{area.toLocaleString()} M²</Text>
           </View>
         </View>
@@ -228,14 +225,15 @@ export default function BattlesScreen() {
       <GlassCard style={styles.historyCard}>
         <View style={styles.historyRow}>
           <Text style={styles.historyIcon}>
-            {item.type === 'stolen' ? '⚔️' : item.type === 'defense' ? '🛡️' : '⚡'}
+            {item.type === 'won' ? '🏆' : item.type === 'lost' ? '💥' : item.type === 'stolen' ? '⚔️' : '🛡️'}
           </Text>
           <View style={styles.historyDetails}>
             <Text style={styles.historyTitle}>
-              {item.type === 'stolen' ? 'SECTOR INVASION DETECTED' : 'ZONE SECURED'}
+              {item.type === 'won' ? 'BATTLE WON' : item.type === 'lost' ? 'BATTLE LOST' : item.type === 'stolen' ? 'TERRITORY LOST' : 'ZONE DEFENDED'}
             </Text>
             <Text style={styles.historyDesc}>
-              {item.playerName} contested {item.areaSqm} m² of turf
+              {item.type === 'won' ? `You out-distanced ${item.playerName}` : `vs ${item.playerName}`}
+              {item.areaSqm ? ` · ${Math.round(item.areaSqm).toLocaleString()} m²` : ''}
             </Text>
           </View>
           <Text style={styles.historyTime}>{item.timestamp}</Text>
@@ -255,10 +253,6 @@ export default function BattlesScreen() {
           <Text style={styles.subtitle}>TERRITORY DISPUTES & DEFENSE</Text>
         </View>
 
-        <TouchableOpacity style={styles.boostChip} onPress={handleActivateBoost} activeOpacity={0.8}>
-          <Text style={styles.boostChipIcon}>⚡</Text>
-          <Text style={styles.boostChipText}>2X BOOST</Text>
-        </TouchableOpacity>
       </View>
 
       {/* ── Tactical Turf Breakdown Panel ── */}
@@ -292,7 +286,7 @@ export default function BattlesScreen() {
           <DisputeBanner
             rivalName={activeInvasions[0].playerName}
             rivalColor={activeInvasions[0].playerColor}
-            areaSqm={activeInvasions[0].areaSqm}
+            areaSqm={activeInvasions[0].areaSqm ?? 0}
             onPressAction={() => navigation.navigate('RUN')}
             actionTitle="RETAKE"
           />
@@ -394,7 +388,7 @@ export default function BattlesScreen() {
               <Text style={styles.emptyIcon}>📜</Text>
               <Text style={styles.emptyTitle}>BATTLE LOG IS CLEAR</Text>
               <Text style={styles.emptyDesc}>
-                Live invasion warnings and completed territory clashes will appear here.
+                Battles you win or lose while the app is open appear here.
               </Text>
             </View>
           }
@@ -408,7 +402,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: COLORS.bgCanvas,
-    paddingTop: Platform.OS === 'ios' ? 52 : 44,
+    paddingTop: 8, // hub screen owns the safe area
   },
   header: {
     flexDirection: 'row',
@@ -468,7 +462,7 @@ const styles = StyleSheet.create({
   tabsRow: {
     flexDirection: 'row',
     marginHorizontal: SPACING.md,
-    backgroundColor: 'rgba(16, 16, 32, 0.92)',
+    backgroundColor: 'rgba(16, 27, 45, 0.92)',
     borderRadius: RADII.pill,
     padding: 3,
     borderWidth: 1,
@@ -532,7 +526,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
   },
   areaBadge: {
-    backgroundColor: 'rgba(255, 42, 85, 0.15)',
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
     borderWidth: 1,
     borderColor: COLORS.crimson,
     paddingHorizontal: 8,

@@ -53,7 +53,8 @@ interface LocalDbData {
   followers: { follower_id: string; following_id: string }[];
 }
 
-const DATA_DIR = path.join(__dirname, '../../../data');
+// LOCAL_DB_DIR lets tests use an isolated store instead of the repo's data/.
+const DATA_DIR = process.env.LOCAL_DB_DIR || path.join(__dirname, '../../../data');
 const DB_FILE = path.join(DATA_DIR, 'local-db.json');
 
 class LocalStore {

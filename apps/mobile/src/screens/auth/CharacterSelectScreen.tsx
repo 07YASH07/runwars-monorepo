@@ -47,7 +47,7 @@ const CHARACTERS: CharacterCard[] = [
     name: 'Warrior',
     emoji: CHARACTER_EMOJI.warrior,
     description: CHARACTER_DESCRIPTIONS.warrior,
-    accentColor: '#FF4D4D',
+    accentColor: '#EF4444',
     bgColor: '#2A0A0A',
   },
   {
@@ -63,7 +63,7 @@ const CHARACTERS: CharacterCard[] = [
     name: 'Mage',
     emoji: CHARACTER_EMOJI.mage,
     description: CHARACTER_DESCRIPTIONS.mage,
-    accentColor: '#00BFFF',
+    accentColor: '#38BDF8',
     bgColor: '#0A1A2A',
   },
   {
@@ -71,7 +71,7 @@ const CHARACTERS: CharacterCard[] = [
     name: 'Scout',
     emoji: CHARACTER_EMOJI.scout,
     description: CHARACTER_DESCRIPTIONS.scout,
-    accentColor: '#32CD32',
+    accentColor: '#22C55E',
     bgColor: '#0A1A0A',
   },
 ];
@@ -273,7 +273,7 @@ export default function CharacterSelectScreen({ navigation: _navigation }: Props
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0D0D1A',
+    backgroundColor: '#0B1220',
   },
   scrollContent: {
     paddingHorizontal: 20,
@@ -289,7 +289,7 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     fontSize: 14,
-    color: '#8888AA',
+    color: '#94A3B8',
     marginTop: 10,
     marginBottom: 28,
   },
@@ -306,7 +306,7 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     padding: 16,
     borderWidth: 1,
-    borderColor: '#2A2A4A',
+    borderColor: '#29384F',
     minHeight: 180,
     alignItems: 'center',
     justifyContent: 'center',
@@ -323,7 +323,7 @@ const styles = StyleSheet.create({
   },
   cardDescription: {
     fontSize: 11,
-    color: '#8888AA',
+    color: '#94A3B8',
     textAlign: 'center',
     lineHeight: 16,
   },
@@ -334,18 +334,18 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   selectedBadgeText: {
-    color: '#0D0D1A',
+    color: '#0B1220',
     fontSize: 10,
     fontWeight: '900',
     letterSpacing: 1,
   },
   colorSection: {
     marginTop: 28,
-    backgroundColor: '#16162A',
+    backgroundColor: '#162238',
     borderRadius: 18,
     padding: 20,
     borderWidth: 1,
-    borderColor: '#2A2A4A',
+    borderColor: '#29384F',
   },
   colorTitle: {
     fontSize: 16,
@@ -355,7 +355,7 @@ const styles = StyleSheet.create({
   },
   colorSubtitle: {
     fontSize: 12,
-    color: '#8888AA',
+    color: '#94A3B8',
     marginBottom: 16,
   },
   colorRow: {
@@ -379,7 +379,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   rerollButton: {
-    backgroundColor: '#2A2A4A',
+    backgroundColor: '#29384F',
     borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 8,
@@ -407,12 +407,12 @@ const styles = StyleSheet.create({
     transform: [{ scale: 1.2 }],
   },
   confirmButton: {
-    backgroundColor: '#00BFFF',
+    backgroundColor: '#38BDF8',
     borderRadius: 16,
     paddingVertical: 18,
     alignItems: 'center',
     marginTop: 28,
-    shadowColor: '#00BFFF',
+    shadowColor: '#38BDF8',
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.5,
     shadowRadius: 16,
@@ -423,7 +423,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0,
   },
   confirmButtonText: {
-    color: '#0D0D1A',
+    color: '#0B1220',
     fontSize: 17,
     fontWeight: '900',
     letterSpacing: 0.5,

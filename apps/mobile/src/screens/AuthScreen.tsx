@@ -30,9 +30,18 @@ import {
 } from '@/theme/tokens';
 import { GameButton, GlassCard } from '@/components/ui';
 import { CharacterType } from '@runwars/shared';
+import { GoogleSignin, statusCodes } from '@react-native-google-signin/google-signin';
+
+// Google sign-in is only offered when a web client ID is configured for this build.
+const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '';
+if (GOOGLE_WEB_CLIENT_ID) {
+  try { GoogleSignin.configure({ webClientId: GOOGLE_WEB_CLIENT_ID }); } catch {}
+}
 
 export default function AuthScreen() {
-  const { login, register, isLoading } = useAuth();
+  const { login, register, signInWithGoogle } = useAuth();
+  const [submitting, setSubmitting] = useState(false);
+  const [googleBusy, setGoogleBusy] = useState(false);
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -41,22 +50,55 @@ export default function AuthScreen() {
   const [error, setError] = useState('');
 
   const handleSubmit = async () => {
-    if (!email || !password || (!isLogin && !displayName)) {
+    if (submitting) return;
+    const cleanEmail = email.trim();
+    if (!cleanEmail || !password || (!isLogin && !displayName.trim())) {
       setError('Please fill in all required fields.');
       return;
     }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      setError('Enter a valid email address.');
+      return;
+    }
+    if (!isLogin && password.length < 6) {
+      setError('Password must be at least 6 characters.');
+      return;
+    }
     setError('');
-
+    setSubmitting(true);
     try {
       if (isLogin) {
-        await login(email, password);
+        await login(cleanEmail, password);
       } else {
         const theme = CLASS_THEMES[selectedClass as keyof typeof CLASS_THEMES];
         const classColor = theme ? theme.color : COLORS.neonGreen;
-        await register(email, password, displayName, selectedClass, classColor);
+        await register(cleanEmail, password, displayName.trim(), selectedClass, classColor);
       }
     } catch (err: any) {
-      setError(err.message || 'Authentication link failed.');
+      setError(err?.message || 'Sign-in failed. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleGoogle = async () => {
+    if (googleBusy) return;
+    setError('');
+    setGoogleBusy(true);
+    try {
+      await GoogleSignin.hasPlayServices();
+      const result: any = await GoogleSignin.signIn();
+      const idToken = result?.data?.idToken ?? result?.idToken;
+      if (!idToken) {
+        if (result?.type === 'cancelled') return;
+        throw new Error('Google did not return a sign-in token.');
+      }
+      await signInWithGoogle(idToken);
+    } catch (err: any) {
+      if (err?.code === statusCodes.SIGN_IN_CANCELLED) return;
+      setError(err?.message || 'Google sign-in failed.');
+    } finally {
+      setGoogleBusy(false);
     }
   };
 
@@ -75,7 +117,7 @@ export default function AuthScreen() {
           <Text style={styles.logoIcon}>⚡</Text>
           <Text style={styles.title}>STRIDECLASH</Text>
           <Text style={styles.subtitle}>
-            {isLogin ? 'VANGUARD SECURE LINK' : 'JOIN THE GLOBAL TURF CONQUEST'}
+            {isLogin ? 'Welcome back, runner' : 'Join the territory race'}
           </Text>
         </View>
 
@@ -193,14 +235,26 @@ export default function AuthScreen() {
 
           {/* Submit Action */}
           <GameButton
-            title={isLogin ? 'INITIATE LINK   →' : 'CREATE ACCOUNT   ⚡'}
+            title={isLogin ? 'Log in' : 'Create account'}
             onPress={handleSubmit}
             variant="primary"
             size="lg"
-            isLoading={isLoading}
+            isLoading={submitting}
+            disabled={googleBusy}
             style={{ marginTop: 18 }}
             testID="auth-submit-btn"
           />
+
+          {!!GOOGLE_WEB_CLIENT_ID && (
+            <TouchableOpacity
+              style={styles.googleBtn}
+              onPress={handleGoogle}
+              disabled={googleBusy || submitting}
+              testID="auth-google-btn"
+            >
+              {googleBusy ? <ActivityIndicator color={COLORS.textPrimary} /> : <Text style={styles.googleText}>Continue with Google</Text>}
+            </TouchableOpacity>
+          )}
         </GlassCard>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -271,7 +325,7 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   errorBanner: {
-    backgroundColor: 'rgba(255, 42, 85, 0.15)',
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
     borderWidth: 1,
     borderColor: COLORS.crimson,
     borderRadius: RADII.sm,
@@ -342,6 +396,17 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 0.8,
   },
+  googleBtn: {
+    marginTop: 12,
+    height: 52,
+    borderRadius: RADII.md,
+    borderWidth: 1,
+    borderColor: COLORS.borderMedium,
+    backgroundColor: COLORS.bgSurfaceElevated,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  googleText: { color: COLORS.textPrimary, fontSize: 15, fontWeight: '700' },
   perkDesc: {
     fontSize: 10,
     color: COLORS.textSecondary,

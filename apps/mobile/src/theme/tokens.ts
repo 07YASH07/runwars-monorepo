@@ -4,44 +4,61 @@
  */
 
 export const COLORS = {
-  // Backgrounds
-  bgCanvas: '#080811',
-  bgSurface: '#101020',
-  bgSurfaceElevated: '#16162D',
-  bgGlass: 'rgba(16, 16, 32, 0.85)',
-  bgGlassSubtle: 'rgba(255, 255, 255, 0.04)',
-  bgGlassCard: 'rgba(22, 22, 45, 0.88)',
+  // Backgrounds (StrideClash 2026 palette)
+  bgCanvas: '#0B1220',
+  bgSurface: '#101B2D',
+  bgCard: '#162238',
+  bgSurfaceElevated: '#1D2B42',
+  bgGlass: 'rgba(16, 27, 45, 0.92)',
+  bgGlassSubtle: 'rgba(148, 163, 184, 0.06)',
+  bgGlassCard: '#162238',
 
   // Borders
-  borderSubtle: 'rgba(255, 255, 255, 0.08)',
-  borderMedium: 'rgba(255, 255, 255, 0.16)',
-  borderActive: 'rgba(0, 255, 136, 0.45)',
-  borderGlow: 'rgba(0, 191, 255, 0.50)',
+  border: '#29384F',
+  borderSubtle: '#29384F',
+  borderMedium: '#3A4B66',
+  borderActive: 'rgba(34, 197, 94, 0.55)',
+  borderGlow: 'rgba(56, 189, 248, 0.55)',
 
-  // Gaming Accents
-  neonGreen: '#00FF88',      // Primary Brand / Turf Claim / Start Run
-  electricBlue: '#00BFFF',   // Secondary / Route / GPS Signal
-  cyberPurple: '#9D00FF',    // Abilities / Boosts / Rare
-  gold: '#FFD700',           // Coins / 1st Place / Prestige
-  silver: '#C0C0D8',         // 2nd Place / Neutral
-  bronze: '#CD7F32',         // 3rd Place
-  crimson: '#FF2A55',        // Enemy / Stop / Danger / Disputes
-  warningAmber: '#FFB800',   // Pause / Warning
+  // Accents (legacy key names kept so every screen picks up the new palette)
+  primary: '#22C55E',
+  secondary: '#38BDF8',
+  amber: '#F59E0B',
+  neonGreen: '#22C55E',      // Primary / Start / Claim
+  electricBlue: '#38BDF8',   // Secondary / Route / GPS
+  cyberPurple: '#A78BFA',    // Rare / Boosts
+  gold: '#F59E0B',           // Coins / 1st place
+  silver: '#CBD5E1',         // 2nd place
+  bronze: '#D97706',         // 3rd place
+  crimson: '#EF4444',        // Danger / Stop / Rival
+  warningAmber: '#F59E0B',   // Pause / Warning
 
-  // Text Hierarchy
-  textPrimary: '#FFFFFF',
-  textSecondary: '#9E9EB8',
-  textMuted: '#63637E',
-  textInverse: '#080811',
+  // Text
+  textPrimary: '#F8FAFC',
+  textSecondary: '#94A3B8',
+  textMuted: '#64748B',
+  textInverse: '#0B1220',
 
-  // Map Polygon Fills
-  mapFillUser: 'rgba(0, 255, 136, 0.28)',
-  mapStrokeUser: '#00FF88',
-  mapFillRival: 'rgba(255, 42, 85, 0.25)',
-  mapStrokeRival: '#FF2A55',
-  mapFillNeutral: 'rgba(0, 191, 255, 0.20)',
-  mapStrokeNeutral: '#00BFFF',
+  // Map polygons
+  mapFillUser: 'rgba(34, 197, 94, 0.28)',
+  mapStrokeUser: '#22C55E',
+  mapFillRival: 'rgba(239, 68, 68, 0.25)',
+  mapStrokeRival: '#EF4444',
+  mapFillNeutral: 'rgba(56, 189, 248, 0.20)',
+  mapStrokeNeutral: '#38BDF8',
 } as const;
+
+export const TYPE = {
+  display: { fontSize: 28, fontWeight: '800' as const, letterSpacing: 0.2 },
+  title: { fontSize: 20, fontWeight: '800' as const },
+  heading: { fontSize: 16, fontWeight: '700' as const },
+  body: { fontSize: 14, fontWeight: '500' as const },
+  caption: { fontSize: 12, fontWeight: '500' as const },
+  label: { fontSize: 11, fontWeight: '700' as const, letterSpacing: 0.8 },
+} as const;
+
+/** Standard control heights (dp). */
+export const CONTROL = { sm: 36, md: 44, lg: 52, hero: 64 } as const;
 
 export const CLASS_THEMES = {
   scout: {
@@ -105,37 +122,37 @@ export const SHADOWS = {
   neonGlow: {
     shadowColor: COLORS.neonGreen,
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.45,
-    shadowRadius: 10,
-    elevation: 8,
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 4,
   },
   blueGlow: {
     shadowColor: COLORS.electricBlue,
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.45,
-    shadowRadius: 10,
-    elevation: 8,
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 4,
   },
   purpleGlow: {
     shadowColor: COLORS.cyberPurple,
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.45,
-    shadowRadius: 10,
-    elevation: 8,
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 4,
   },
   crimsonGlow: {
     shadowColor: COLORS.crimson,
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.45,
-    shadowRadius: 10,
-    elevation: 8,
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 4,
   },
   goldGlow: {
     shadowColor: COLORS.gold,
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.45,
-    shadowRadius: 10,
-    elevation: 8,
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 4,
   },
   surface: {
     shadowColor: '#000000',

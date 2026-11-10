@@ -14,6 +14,7 @@ import {
 import { useMultiplayer } from '@/hooks/useMultiplayer';
 import { CHARACTER_EMOJI, CharacterType } from '@runwars/shared';
 import { useAuth } from '@/context/AuthContext';
+import { useNavigation } from '@react-navigation/native';
 
 import { apiFetch } from '@/config/api';
 
@@ -38,7 +39,30 @@ interface ProfileData {
 export default function CommunityScreen() {
   const { user } = useAuth();
   const { livePlayers } = useMultiplayer();
+  const navigation = useNavigation<any>();
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searching, setSearching] = useState(false);
+
+  // Server-side user search (all registered runners, not just those online).
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (q.length < 2) { setSearchResults([]); return; }
+    let cancelled = false;
+    setSearching(true);
+    const t = setTimeout(async () => {
+      try {
+        const res = await apiFetch(`/api/users/search?q=${encodeURIComponent(q)}`);
+        const data = res.ok ? await res.json() : [];
+        if (!cancelled) setSearchResults(Array.isArray(data) ? data.filter((u: any) => u.id !== user?.uid) : []);
+      } catch {
+        if (!cancelled) setSearchResults([]);
+      } finally {
+        if (!cancelled) setSearching(false);
+      }
+    }, 350);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [searchQuery, user?.uid]);
 
   // Profile Modal State
   const [profileVisible, setProfileVisible] = useState(false);
@@ -76,7 +100,14 @@ export default function CommunityScreen() {
     p.displayName.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const openUserProfile = async (targetUserId: string) => {
+  const openUserProfile = (targetUserId: string) => {
+    if (!targetUserId) return;
+    if (targetUserId === user?.uid) navigation.navigate('PROFILE');
+    else navigation.navigate('UserProfile', { userId: targetUserId });
+  };
+
+  // Legacy mini-card (kept for reference; profile taps now open the full profile).
+  const openUserProfileCard = async (targetUserId: string) => {
     setSelectedUserId(targetUserId);
     setProfileVisible(true);
     setLoadingProfile(true);
@@ -125,6 +156,40 @@ export default function CommunityScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+        {searchQuery.trim().length >= 2 && (
+          <View style={{ marginBottom: 16 }}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>RUNNERS MATCHING "{searchQuery.trim().toUpperCase()}"</Text>
+            </View>
+            {searching ? (
+              <ActivityIndicator color="#38BDF8" />
+            ) : searchResults.length === 0 ? (
+              <Text style={styles.emptySub}>No runners found.</Text>
+            ) : (
+              searchResults.map((u) => {
+                const c = u.color || '#38BDF8';
+                return (
+                  <TouchableOpacity
+                    key={u.id}
+                    style={[styles.playerRow, { borderColor: c + '44' }]}
+                    onPress={() => openUserProfile(u.id)}
+                    activeOpacity={0.8}
+                    testID={`search-result-${u.id}`}
+                  >
+                    <View style={[styles.avatar, { borderColor: c, backgroundColor: c + '11' }]}>
+                      <Text style={styles.avatarEmoji}>{CHARACTER_EMOJI[u.character_type as CharacterType] || '🏃'}</Text>
+                    </View>
+                    <View style={styles.playerInfo}>
+                      <Text style={styles.playerName}>{(u.display_name || 'Runner').toUpperCase()}</Text>
+                      {!!u.bio && <Text style={styles.playerSub} numberOfLines={1}>{u.bio}</Text>}
+                    </View>
+                  </TouchableOpacity>
+                );
+              })
+            )}
+          </View>
+        )}
+
         {/* Active Players Heading */}
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>LIVE IN THE ARENA ({livePlayers.length})</Text>
@@ -140,7 +205,7 @@ export default function CommunityScreen() {
           filteredPlayers.map((player) => {
             const isSelf = player.userId === user?.uid;
             const emoji = CHARACTER_EMOJI[player.characterType as CharacterType] || '🏃';
-            const playerColor = player.color || '#00BFFF';
+            const playerColor = player.color || '#38BDF8';
 
             return (
               <TouchableOpacity
@@ -191,7 +256,7 @@ export default function CommunityScreen() {
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.recommendedScroll}>
             {recommendedUsers.map((recUser, index) => {
               const recEmoji = CHARACTER_EMOJI[recUser.characterType as CharacterType] || '🏃';
-              const recColor = recUser.color || '#00BFFF';
+              const recColor = recUser.color || '#38BDF8';
               return (
                 <TouchableOpacity
                   key={recUser.userId || index.toString()}
@@ -224,7 +289,7 @@ export default function CommunityScreen() {
         </View>
 
         <View style={styles.infoCard}>
-          <Text style={[styles.infoCardTitle, { color: '#00BFFF' }]}>🏃 ARENA RULES</Text>
+          <Text style={[styles.infoCardTitle, { color: '#38BDF8' }]}>🏃 ARENA RULES</Text>
           <Text style={styles.infoCardBody}>
             • Speed limits are enforced per activity type (Walk: 10 km/h, Run: 40 km/h, Cycle: 70 km/h).
             • Claim logs are saved persistently and broadcasted directly to the social feed.
@@ -336,44 +401,44 @@ export default function CommunityScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0D0D1A',
+    backgroundColor: '#0B1220',
   },
   header: {
-    backgroundColor: '#111124',
+    backgroundColor: '#101B2D',
     borderBottomWidth: 1,
-    borderBottomColor: '#1E1E38',
-    paddingTop: 55,
+    borderBottomColor: '#29384F',
+    paddingTop: 14,
     paddingBottom: 16,
     paddingHorizontal: 20,
   },
   headerTitle: {
     fontSize: 22,
     fontWeight: '900',
-    color: '#00BFFF',
+    color: '#38BDF8',
     letterSpacing: 2,
   },
   headerSub: {
     fontSize: 12,
-    color: '#4A4A6A',
+    color: '#64748B',
     marginTop: 4,
   },
   searchContainer: {
     paddingHorizontal: 16,
     paddingVertical: 12,
-    backgroundColor: '#0D0D1A',
+    backgroundColor: '#0B1220',
     borderBottomWidth: 1,
-    borderBottomColor: '#1E1E38',
+    borderBottomColor: '#29384F',
   },
   searchInput: {
     height: 40,
-    backgroundColor: '#16162A',
+    backgroundColor: '#162238',
     borderRadius: 8,
     paddingHorizontal: 12,
     fontSize: 14,
     fontWeight: '500',
     color: '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#2A2A4A',
+    borderColor: '#29384F',
   },
   scroll: {
     padding: 16,
@@ -388,14 +453,14 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 11,
     fontWeight: '900',
-    color: '#4A4A6A',
+    color: '#64748B',
     letterSpacing: 1,
   },
   livePulseDot: {
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: '#32CD32',
+    backgroundColor: '#22C55E',
     marginLeft: 6,
   },
   emptyContainer: {
@@ -410,13 +475,13 @@ const styles = StyleSheet.create({
   },
   emptySub: {
     fontSize: 11,
-    color: '#4A4A6A',
+    color: '#64748B',
     textAlign: 'center',
     marginTop: 4,
     paddingHorizontal: 24,
   },
   playerRow: {
-    backgroundColor: '#16162A',
+    backgroundColor: '#162238',
     borderRadius: 12,
     borderWidth: 1,
     padding: 12,
@@ -448,11 +513,11 @@ const styles = StyleSheet.create({
   selfTag: {
     fontSize: 10,
     fontWeight: '900',
-    color: '#00BFFF',
+    color: '#38BDF8',
   },
   playerSub: {
     fontSize: 11,
-    color: '#4A4A6A',
+    color: '#64748B',
     fontWeight: '600',
     marginTop: 2,
   },
@@ -466,35 +531,35 @@ const styles = StyleSheet.create({
     borderRadius: 4,
   },
   onlineIndicator: {
-    backgroundColor: '#32CD32',
+    backgroundColor: '#22C55E',
   },
   runningIndicator: {
-    backgroundColor: '#FF3B30',
+    backgroundColor: '#EF4444',
   },
   statusText: {
     fontSize: 8,
     fontWeight: '900',
-    color: '#4A4A6A',
+    color: '#64748B',
     marginTop: 4,
     letterSpacing: 0.5,
   },
   infoCard: {
     marginTop: 16,
-    backgroundColor: '#16162A',
+    backgroundColor: '#162238',
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#2A2A4A',
+    borderColor: '#29384F',
     padding: 16,
   },
   infoCardTitle: {
-    color: '#FF8C00',
+    color: '#F59E0B',
     fontSize: 13,
     fontWeight: '900',
     letterSpacing: 1,
     marginBottom: 6,
   },
   infoCardBody: {
-    color: '#8A8AAB',
+    color: '#94A3B8',
     fontSize: 12,
     lineHeight: 18,
     fontWeight: '600',
@@ -506,7 +571,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   recCard: {
-    backgroundColor: '#16162A',
+    backgroundColor: '#162238',
     borderRadius: 16,
     borderWidth: 1,
     padding: 16,
@@ -538,7 +603,7 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   recDistanceBadge: {
-    backgroundColor: '#2A2A4A',
+    backgroundColor: '#29384F',
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 4,
@@ -546,7 +611,7 @@ const styles = StyleSheet.create({
   recDistanceText: {
     fontSize: 9,
     fontWeight: '700',
-    color: '#CCCCCC',
+    color: '#CBD5E1',
   },
 
   // Modal Profile styling
@@ -558,10 +623,10 @@ const styles = StyleSheet.create({
   },
   profileCard: {
     width: '80%',
-    backgroundColor: '#16162A',
+    backgroundColor: '#162238',
     borderRadius: 16,
     borderWidth: 1.5,
-    borderColor: '#00BFFF',
+    borderColor: '#38BDF8',
     padding: 24,
     alignItems: 'center',
     shadowColor: '#000',
@@ -575,7 +640,7 @@ const styles = StyleSheet.create({
     height: 80,
     borderRadius: 40,
     borderWidth: 3,
-    backgroundColor: '#0D0D1A',
+    backgroundColor: '#0B1220',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 12,
@@ -583,14 +648,14 @@ const styles = StyleSheet.create({
   profileAvatarEmoji: { fontSize: 44 },
   profileName: { fontSize: 18, fontWeight: '900', color: '#FFFFFF' },
   profileClass: { fontSize: 11, fontWeight: '900', marginTop: 4 },
-  profileBio: { fontSize: 13, color: '#8A8AAB', textAlign: 'center', marginTop: 10, fontStyle: 'italic' },
-  profileDivider: { width: '100%', height: 1, backgroundColor: '#2A2A4A', marginVertical: 16 },
+  profileBio: { fontSize: 13, color: '#94A3B8', textAlign: 'center', marginTop: 10, fontStyle: 'italic' },
+  profileDivider: { width: '100%', height: 1, backgroundColor: '#29384F', marginVertical: 16 },
 
   statsGrid: { flexDirection: 'row', width: '100%', justifyContent: 'space-around' },
   statsGridCol: { alignItems: 'center' },
   gridStatVal: { fontSize: 16, fontWeight: '900', color: '#FFFFFF' },
-  gridStatLbl: { fontSize: 9, color: '#4A4A6A', fontWeight: '800', marginTop: 2 },
-  noProfileText: { color: '#4A4A6A', textAlign: 'center' },
+  gridStatLbl: { fontSize: 9, color: '#64748B', fontWeight: '800', marginTop: 2 },
+  noProfileText: { color: '#64748B', textAlign: 'center' },
   followBtn: {
     marginTop: 20,
     paddingVertical: 12,
@@ -600,7 +665,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   followBtnText: {
-    color: '#0D0D1A',
+    color: '#0B1220',
     fontSize: 14,
     fontWeight: '900',
     letterSpacing: 1,

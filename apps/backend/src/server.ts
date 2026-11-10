@@ -8,8 +8,18 @@ import path from 'path';
 import fs from 'fs';
 import { Pool } from 'pg';
 import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import { Expo } from 'expo-server-sdk';
+import {
+  requireAuth,
+  optionalAuth,
+  requireAdmin,
+  signUserToken,
+  socketUserId,
+  verifyFirebaseIdToken,
+  createFirebaseCustomToken,
+  firebaseCustomTokensEnabled,
+} from './auth';
 import { localStore, LocalUser } from './localStore';
 import {
   LivePlayerState,
@@ -26,8 +36,9 @@ dotenv.config();
 const app = express();
 app.use(cors());
 app.use(morgan('dev'));
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
+// Images go to Firebase Storage, never through the API, so JSON bodies stay small.
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ limit: '1mb', extended: true }));
 app.use('/admin', express.static(path.join(__dirname, '../../admin/dist')));
 
 // Direct APK download route for mobile devices
@@ -257,6 +268,23 @@ async function sendPushNotification(pushToken: string, title: string, body: stri
   }
 }
 
+// --- Image URL validation ---
+const STORAGE_BUCKET = process.env.FIREBASE_STORAGE_BUCKET?.trim() || 'runwars-355df.firebasestorage.app';
+
+/** True only for a Firebase Storage download URL inside the caller's own folder. */
+function isOwnStorageImageUrl(raw: unknown, userId: string): boolean {
+  if (typeof raw !== 'string' || raw.length > 2048) return false;
+  let u: URL;
+  try { u = new URL(raw); } catch { return false; }
+  if (u.protocol !== 'https:' || u.hostname !== 'firebasestorage.googleapis.com') return false;
+  const m = /^\/v0\/b\/([^/]+)\/o\/([^/]+)$/.exec(u.pathname);
+  if (!m || m[1] !== STORAGE_BUCKET) return false;
+  let objectPath: string;
+  try { objectPath = decodeURIComponent(m[2]); } catch { return false; }
+  const parts = objectPath.split('/');
+  return parts.length === 3 && /^(post|avatar|cover)-images$/.test(parts[0]) && parts[1] === userId && /^[\w.-]+$/.test(parts[2]);
+}
+
 // --- DB Helper Functions ---
 
 async function upsertUser(userId: string, data: Partial<{ email: string; display_name: string; character_type: string; color: string }>) {
@@ -397,16 +425,298 @@ loadAllTerritories().then((territories) => {
   console.log(`✅ [Database] Loaded ${territories.length} existing territories from DB.`);
 });
 
+// ─── Run + territory processing (shared by Socket.IO and REST /api/runs) ─────
+
+type ClaimPayload = TerritoryClaimPayload & { polygonCoordinates: any[]; areaSquareMeters: number; color: string; activityType?: string };
+type ClaimReply = (event: string, data: any) => void;
+
+const ALLOWED_ACTIVITIES = new Set(['run', 'walk', 'cycle']);
+const MAX_ROUTE_POINTS = 20000;
+
+/** Keeps only well-formed GPS points, sorted by time. */
+function sanitizeRoute(points: any): { latitude: number; longitude: number; timestamp: number }[] {
+  if (!Array.isArray(points)) return [];
+  return points
+    .slice(0, MAX_ROUTE_POINTS)
+    .filter((p: any) => p && Number.isFinite(p.latitude) && Number.isFinite(p.longitude) &&
+      Math.abs(p.latitude) <= 90 && Math.abs(p.longitude) <= 180 && Number.isFinite(p.timestamp))
+    .map((p: any) => ({ latitude: p.latitude, longitude: p.longitude, timestamp: p.timestamp, ...(Number.isFinite(p.accuracy) ? { accuracy: p.accuracy } : {}) }))
+    .sort((a: any, b: any) => a.timestamp - b.timestamp);
+}
+
+/** Polygon area (m²) via equirectangular projection + shoelace. */
+function polygonAreaSqm(points: { latitude: number; longitude: number }[]): number {
+  if (points.length < 3) return 0;
+  const lat0 = (points.reduce((s, p) => s + p.latitude, 0) / points.length) * Math.PI / 180;
+  const R = 6371000;
+  const xy = points.map(p => [R * (p.longitude * Math.PI / 180) * Math.cos(lat0), R * (p.latitude * Math.PI / 180)]);
+  let sum = 0;
+  for (let i = 0; i < xy.length; i++) {
+    const [x1, y1] = xy[i];
+    const [x2, y2] = xy[(i + 1) % xy.length];
+    sum += x1 * y2 - x2 * y1;
+  }
+  return Math.abs(sum) / 2;
+}
+
+/** Server-authoritative claim area: enclosed area, or a 2 m corridor along the route. */
+function serverClaimArea(points: { latitude: number; longitude: number }[]): number {
+  return Math.max(polygonAreaSqm(points), calculateDistance(points) * 2);
+}
+
+async function recordRun(payload: RunStopPayload): Promise<any> {
+  // Never trust client-computed numbers: recompute from the GPS route.
+  payload.routePoints = sanitizeRoute(payload.routePoints) as any;
+  payload.distanceMeters = calculateDistance(payload.routePoints);
+  payload.activityType = (ALLOWED_ACTIVITIES.has(String(payload.activityType)) ? payload.activityType : 'run') as any;
+  console.log(`[Runs] Run recorded for user: ${payload.userId}, Distance: ${payload.distanceMeters.toFixed(0)}m`);
+
+  // Persist run to DB and track the promise to avoid race conditions
+  const promise = saveRun(payload.userId, payload.routePoints || [], payload.distanceMeters, payload.activityType);
+  ongoingDbWrites.set(payload.userId, promise);
+  let runId = null;
+  try {
+    runId = await promise;
+  } finally {
+    ongoingDbWrites.delete(payload.userId);
+  }
+
+  // Auto-create a feed post for this run
+  if (runId && payload.distanceMeters > 0) {
+    try {
+      const km = (payload.distanceMeters / 1000).toFixed(2);
+      const act = payload.activityType || 'run';
+      await pool.query(
+        `INSERT INTO posts (user_id, content, post_type, related_id)
+         VALUES ($1, $2, $3, $4)`,
+        [
+          payload.userId,
+          `Completed a new ${act} session covering ${km} km!`,
+          'run',
+          runId
+        ]
+      );
+      // Award 50 Arena Coins
+      await pool.query('UPDATE users SET coins = coins + 50 WHERE id = $1', [payload.userId]);
+      io.emit('feed:updated');
+    } catch (err: any) {
+      console.error('[DB] Failed to auto-generate run feed post:', err.message);
+    }
+  }
+
+  const player = livePlayers.get(payload.userId);
+  if (player) {
+    player.isRunning = false;
+    player.currentSpeedKmh = 0;
+    livePlayers.set(payload.userId, player);
+    io.emit('livePlayersUpdate', Array.from(livePlayers.values()));
+  }
+  return runId;
+}
+
+async function processTerritoryClaim(payload: ClaimPayload, reply: ClaimReply): Promise<'claimed' | 'rejected' | 'lost'> {
+  payload.polygonCoordinates = sanitizeRoute(payload.polygonCoordinates);
+  if (payload.polygonCoordinates.length < 3) {
+    reply('claim:rejected', { reason: 'Not enough GPS points to form a territory.' });
+    return 'rejected';
+  }
+  payload.areaSquareMeters = serverClaimArea(payload.polygonCoordinates);
+  if (!(payload.areaSquareMeters > 0)) {
+    reply('claim:rejected', { reason: 'Invalid territory shape.' });
+    return 'rejected';
+  }
+  payload.activityType = ALLOWED_ACTIVITIES.has(String(payload.activityType)) ? payload.activityType : 'run';
+  if (typeof payload.color !== 'string' || !/^#[0-9a-fA-F]{3,8}$/.test(payload.color)) payload.color = '#00BFFF';
+  payload.runSessionId = String(payload.runSessionId || `session_${Date.now()}`).slice(0, 64);
+  console.log(`[Socket.io] Territory claimed by user: ${payload.userId}, Area: ${payload.areaSquareMeters} sqm`);
+
+  // Wait for any ongoing run saves to complete to prevent distance race conditions
+  const pendingSave = ongoingDbWrites.get(payload.userId);
+  if (pendingSave) {
+    console.log(`[Socket.io] Delaying claim verification: Waiting for user ${payload.userId} run to save...`);
+    await pendingSave;
+  }
+
+  // 🏃 Cheating Prevention: Calculate average speed
+  let avgSpeedKmh = 0;
+  const coords = payload.polygonCoordinates || [];
+  const activityType = payload.activityType || 'run';
+
+  if (coords.length >= 2) {
+    const distanceMeters = calculateDistance(coords);
+    const firstPoint = coords[0];
+    const lastPoint = coords[coords.length - 1];
+    const timeDiffMs = lastPoint.timestamp - firstPoint.timestamp;
+
+    if (timeDiffMs > 0) {
+      const timeDiffHours = timeDiffMs / (1000 * 60 * 60);
+      avgSpeedKmh = (distanceMeters / 1000) / timeDiffHours;
+    }
+  }
+
+  const SPEED_LIMITS: Record<string, number> = {
+    run: 40,
+    walk: 10,
+    cycle: 70
+  };
+  const limit = SPEED_LIMITS[activityType] || 40;
+
+  if (avgSpeedKmh > limit) {
+    console.log(`[CLAIM REJECTED] Speed too high: ${avgSpeedKmh.toFixed(1)} km/h for activity type: ${activityType} (Limit: ${limit} km/h, User: ${payload.userId})`);
+    reply('claim:rejected', {
+      reason: `Your average speed (${avgSpeedKmh.toFixed(1)} km/h) exceeds the maximum allowed speed for ${activityType} (${limit} km/h).`
+    });
+    return 'rejected';
+  }
+
+  let ownerName = 'Runner';
+  let ownerAvatar = '';
+  try {
+    const userRes = await pool.query('SELECT display_name, avatar_url FROM users WHERE id = $1', [payload.userId]);
+    if (userRes.rows[0]) {
+      ownerName = userRes.rows[0].display_name || 'Runner';
+      ownerAvatar = userRes.rows[0].avatar_url || '';
+    }
+  } catch (err) {
+    console.error('[DB] Failed to fetch owner info for territory:', err);
+  }
+
+  const newTerritory: Territory = {
+    id: `terr_${Date.now()}_${payload.userId}`,
+    userId: payload.userId,
+    runSessionId: payload.runSessionId,
+    polygonCoordinates: payload.polygonCoordinates,
+    areaSquareMeters: payload.areaSquareMeters,
+    claimedAt: new Date().toISOString(),
+    color: payload.color,
+    ownerName,
+    ownerAvatar,
+    avgSpeedKmh,
+    activityType
+  };
+
+  // ⚔️ Territory Battle Engine — check for overlaps with other players' territories
+  const newBBox = getBBox(newTerritory.polygonCoordinates);
+  const attackerDistance = await getPlayerTotalDistance(payload.userId);
+
+  for (const existing of Array.from(territoriesCache.values())) {
+    // Skip own territories
+    if (existing.userId === payload.userId) continue;
+
+    const existingBBox = getBBox(existing.polygonCoordinates);
+    if (!bboxOverlaps(newBBox, existingBBox)) continue;
+
+    // ⚔️ Conflict detected!
+    const defenderDistance = await getPlayerTotalDistance(existing.userId);
+    const attackerWins = attackerDistance >= defenderDistance;
+
+    const winner = attackerWins ? payload.userId : existing.userId;
+    const loser  = attackerWins ? existing.userId : payload.userId;
+    const stolenTerritoryId = attackerWins ? existing.id : newTerritory.id;
+
+    console.log(`[Battle] ⚔️ Conflict! Attacker ${payload.userId} (${attackerDistance}m) vs Defender ${existing.userId} (${defenderDistance}m) → Winner: ${winner}`);
+
+    if (attackerWins) {
+      // Delete loser's territory
+      await deleteTerritory(existing.id);
+      territoriesCache.delete(existing.id);
+    }
+
+    // Broadcast conflict result to all clients
+    const conflictPayload = {
+      winnerId: winner,
+      loserId: loser,
+      stolenTerritoryId,
+      winnerDistance: attackerWins ? attackerDistance : defenderDistance,
+      loserDistance: attackerWins ? defenderDistance : attackerDistance,
+    };
+    io.emit('conflict:resolved', conflictPayload);
+
+    // Send targeted 'territory:stolen' to loser's socket
+    const loserSocketId = userToSocket.get(loser);
+    if (loserSocketId) {
+      const loserPlayer = livePlayers.get(winner);
+      io.to(loserSocketId).emit('territory:stolen', {
+        byPlayerName: loserPlayer?.displayName ?? 'Another runner',
+        byPlayerColor: loserPlayer?.color ?? '#FF4D4D',
+      });
+    }
+
+    // Send push notification to loser
+    const loserTokenRes = await pool.query('SELECT expo_push_token FROM users WHERE id = $1', [loser]);
+    const loserPushToken = loserTokenRes.rows[0]?.expo_push_token;
+    const winnerPlayer = livePlayers.get(winner);
+    if (loserPushToken) {
+      await sendPushNotification(
+        loserPushToken,
+        '⚔️ Territory Captured!',
+        `${winnerPlayer?.displayName ?? 'A runner'} just captured your territory! Strike back!`
+      );
+    }
+
+    // If attacker loses, don't save the new territory
+    if (!attackerWins) {
+      io.emit('territoriesUpdate', Array.from(territoriesCache.values()));
+      reply('claim:lost', { reason: 'A stronger runner already holds this ground.' });
+      return 'lost';
+    }
+  }
+
+  // Save to DB
+  await saveTerritory(newTerritory);
+
+  // Auto-create a feed post for this claim
+  try {
+    await pool.query(
+      `INSERT INTO posts (user_id, content, post_type, related_id, created_at)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [
+        payload.userId,
+        `Claimed a new territory of ${payload.areaSquareMeters.toFixed(0)} sqm!`,
+        'territory',
+        newTerritory.id,
+        newTerritory.claimedAt
+      ]
+    );
+    // Award 10 Arena Coins
+    await pool.query('UPDATE users SET coins = coins + 10 WHERE id = $1', [payload.userId]);
+    io.emit('feed:updated');
+  } catch (err: any) {
+    console.error('[DB] Failed to auto-generate territory post:', err.message);
+  }
+
+  // Update in-memory cache
+  territoriesCache.set(newTerritory.id, newTerritory);
+
+  // Broadcast to all clients
+  io.emit('territoryClaimed', newTerritory);
+  io.emit('territoriesUpdate', Array.from(territoriesCache.values()));
+  return 'claimed';
+}
+
 // --- Socket.io Events ---
 
 io.on('connection', async (socket: Socket) => {
-  console.log(`[Socket.io] Client connected: ${socket.id}`);
+  // Identity comes ONLY from the verified handshake token. Unauthenticated
+  // sockets may watch live state but cannot write anything.
+  const authedUserId = socketUserId(socket.handshake.auth);
+  console.log(`[Socket.io] Client connected: ${socket.id} (${authedUserId ? 'authenticated' : 'spectator'})`);
+
+  const requireSocketUser = (event: string, payload: any): boolean => {
+    if (!authedUserId) {
+      socket.emit('auth:error', { event, error: 'Authentication required.', code: 'TOKEN_MISSING' });
+      return false;
+    }
+    if (payload && typeof payload === 'object') payload.userId = authedUserId;
+    return true;
+  };
 
   // Send current live state to newly connected client
   socket.emit('livePlayersUpdate', Array.from(livePlayers.values()));
   socket.emit('territoriesUpdate', Array.from(territoriesCache.values()));
 
   socket.on('playerJoin', async (payload: PlayerJoinPayload) => {
+    if (!requireSocketUser('playerJoin', payload)) return;
     console.log(`[Socket.io] Player joined: ${payload.displayName} (${payload.userId})`);
 
     // Persist user to DB
@@ -437,6 +747,7 @@ io.on('connection', async (socket: Socket) => {
 
   // Register push token
   socket.on('registerPushToken', (payload: { userId: string; token: string }) => {
+    if (!requireSocketUser('registerPushToken', payload)) return;
     if (payload.userId && payload.token) {
       pushTokens.set(payload.userId, payload.token);
       console.log(`[Push] Token registered for user ${payload.userId}`);
@@ -444,6 +755,7 @@ io.on('connection', async (socket: Socket) => {
   });
 
   socket.on('locationUpdate', async (payload: LocationUpdatePayload) => {
+    if (!requireSocketUser('locationUpdate', payload)) return;
     const player = livePlayers.get(payload.userId);
     if (player) {
       player.currentPosition = payload.point;
@@ -502,6 +814,7 @@ io.on('connection', async (socket: Socket) => {
   });
 
   socket.on('runStart', (payload: RunStartPayload) => {
+    if (!requireSocketUser('runStart', payload)) return;
     console.log(`[Socket.io] Run started by user: ${payload.userId}`);
     const player = livePlayers.get(payload.userId);
     if (player) {
@@ -512,213 +825,13 @@ io.on('connection', async (socket: Socket) => {
   });
 
   socket.on('runStop', async (payload: RunStopPayload) => {
-    console.log(`[Socket.io] Run stopped by user: ${payload.userId}, Distance: ${payload.distanceMeters}m`);
-
-    // Persist run to DB and track the promise to avoid race conditions
-    const promise = saveRun(payload.userId, payload.routePoints || [], payload.distanceMeters, payload.activityType);
-    ongoingDbWrites.set(payload.userId, promise);
-    let runId = null;
-    try {
-      runId = await promise;
-    } finally {
-      ongoingDbWrites.delete(payload.userId);
-    }
-
-    // Auto-create a feed post for this run
-    if (runId && payload.distanceMeters > 0) {
-      try {
-        const km = (payload.distanceMeters / 1000).toFixed(2);
-        const act = payload.activityType || 'run';
-        await pool.query(
-          `INSERT INTO posts (user_id, content, post_type, related_id)
-           VALUES ($1, $2, $3, $4)`,
-          [
-            payload.userId,
-            `Completed a new ${act} session covering ${km} km!`,
-            'run',
-            runId
-          ]
-        );
-        // Award 50 Arena Coins
-        await pool.query('UPDATE users SET coins = coins + 50 WHERE id = $1', [payload.userId]);
-        io.emit('feed:updated');
-      } catch (err: any) {
-        console.error('[DB] Failed to auto-generate run feed post:', err.message);
-      }
-    }
-
-    const player = livePlayers.get(payload.userId);
-    if (player) {
-      player.isRunning = false;
-      player.currentSpeedKmh = 0;
-      livePlayers.set(payload.userId, player);
-      io.emit('livePlayersUpdate', Array.from(livePlayers.values()));
-    }
+    if (!requireSocketUser('runStop', payload)) return;
+    await recordRun(payload);
   });
 
-  socket.on('territoryClaim', async (payload: TerritoryClaimPayload & { polygonCoordinates: any[]; areaSquareMeters: number; color: string; activityType?: string }) => {
-    console.log(`[Socket.io] Territory claimed by user: ${payload.userId}, Area: ${payload.areaSquareMeters} sqm`);
-
-    // Wait for any ongoing run saves to complete to prevent distance race conditions
-    const pendingSave = ongoingDbWrites.get(payload.userId);
-    if (pendingSave) {
-      console.log(`[Socket.io] Delaying claim verification: Waiting for user ${payload.userId} run to save...`);
-      await pendingSave;
-    }
-
-    // 🏃 Cheating Prevention: Calculate average speed
-    let avgSpeedKmh = 0;
-    const coords = payload.polygonCoordinates || [];
-    const activityType = payload.activityType || 'run';
-
-    if (coords.length >= 2) {
-      const distanceMeters = calculateDistance(coords);
-      const firstPoint = coords[0];
-      const lastPoint = coords[coords.length - 1];
-      const timeDiffMs = lastPoint.timestamp - firstPoint.timestamp;
-
-      if (timeDiffMs > 0) {
-        const timeDiffHours = timeDiffMs / (1000 * 60 * 60);
-        avgSpeedKmh = (distanceMeters / 1000) / timeDiffHours;
-      }
-    }
-
-    const SPEED_LIMITS: Record<string, number> = {
-      run: 40,
-      walk: 10,
-      cycle: 70
-    };
-    const limit = SPEED_LIMITS[activityType] || 40;
-
-    if (avgSpeedKmh > limit) {
-      console.log(`[CLAIM REJECTED] Speed too high: ${avgSpeedKmh.toFixed(1)} km/h for activity type: ${activityType} (Limit: ${limit} km/h, User: ${payload.userId})`);
-      socket.emit('claim:rejected', {
-        reason: `Your average speed (${avgSpeedKmh.toFixed(1)} km/h) exceeds the maximum allowed speed for ${activityType} (${limit} km/h).`
-      });
-      return;
-    }
-
-    let ownerName = 'Runner';
-    let ownerAvatar = '';
-    try {
-      const userRes = await pool.query('SELECT display_name, avatar_url FROM users WHERE id = $1', [payload.userId]);
-      if (userRes.rows[0]) {
-        ownerName = userRes.rows[0].display_name || 'Runner';
-        ownerAvatar = userRes.rows[0].avatar_url || '';
-      }
-    } catch (err) {
-      console.error('[DB] Failed to fetch owner info for territory:', err);
-    }
-
-    const newTerritory: Territory = {
-      id: `terr_${Date.now()}_${payload.userId}`,
-      userId: payload.userId,
-      runSessionId: payload.runSessionId,
-      polygonCoordinates: payload.polygonCoordinates,
-      areaSquareMeters: payload.areaSquareMeters,
-      claimedAt: new Date().toISOString(),
-      color: payload.color,
-      ownerName,
-      ownerAvatar,
-      avgSpeedKmh,
-      activityType
-    };
-
-    // ⚔️ Territory Battle Engine — check for overlaps with other players' territories
-    const newBBox = getBBox(newTerritory.polygonCoordinates);
-    const attackerDistance = await getPlayerTotalDistance(payload.userId);
-
-    for (const existing of Array.from(territoriesCache.values())) {
-      // Skip own territories
-      if (existing.userId === payload.userId) continue;
-
-      const existingBBox = getBBox(existing.polygonCoordinates);
-      if (!bboxOverlaps(newBBox, existingBBox)) continue;
-
-      // ⚔️ Conflict detected!
-      const defenderDistance = await getPlayerTotalDistance(existing.userId);
-      const attackerWins = attackerDistance >= defenderDistance;
-
-      const winner = attackerWins ? payload.userId : existing.userId;
-      const loser  = attackerWins ? existing.userId : payload.userId;
-      const stolenTerritoryId = attackerWins ? existing.id : newTerritory.id;
-
-      console.log(`[Battle] ⚔️ Conflict! Attacker ${payload.userId} (${attackerDistance}m) vs Defender ${existing.userId} (${defenderDistance}m) → Winner: ${winner}`);
-
-      if (attackerWins) {
-        // Delete loser's territory
-        await deleteTerritory(existing.id);
-        territoriesCache.delete(existing.id);
-      }
-
-      // Broadcast conflict result to all clients
-      const conflictPayload = {
-        winnerId: winner,
-        loserId: loser,
-        stolenTerritoryId,
-        winnerDistance: attackerWins ? attackerDistance : defenderDistance,
-        loserDistance: attackerWins ? defenderDistance : attackerDistance,
-      };
-      io.emit('conflict:resolved', conflictPayload);
-
-      // Send targeted 'territory:stolen' to loser's socket
-      const loserSocketId = userToSocket.get(loser);
-      if (loserSocketId) {
-        const loserPlayer = livePlayers.get(winner);
-        io.to(loserSocketId).emit('territory:stolen', {
-          byPlayerName: loserPlayer?.displayName ?? 'Another runner',
-          byPlayerColor: loserPlayer?.color ?? '#FF4D4D',
-        });
-      }
-
-      // Send push notification to loser
-      const loserTokenRes = await pool.query('SELECT expo_push_token FROM users WHERE id = $1', [loser]);
-      const loserPushToken = loserTokenRes.rows[0]?.expo_push_token;
-      const winnerPlayer = livePlayers.get(winner);
-      if (loserPushToken) {
-        await sendPushNotification(
-          loserPushToken,
-          '⚔️ Territory Captured!',
-          `${winnerPlayer?.displayName ?? 'A runner'} just captured your territory! Strike back!`
-        );
-      }
-
-      // If attacker loses, don't save the new territory
-      if (!attackerWins) {
-        io.emit('territoriesUpdate', Array.from(territoriesCache.values()));
-        return;
-      }
-    }
-
-    // Save to DB
-    await saveTerritory(newTerritory);
-
-    // Auto-create a feed post for this claim
-    try {
-      await pool.query(
-        `INSERT INTO posts (user_id, content, post_type, related_id, created_at)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [
-          payload.userId,
-          `Claimed a new territory of ${payload.areaSquareMeters.toFixed(0)} sqm!`,
-          'territory',
-          newTerritory.id,
-          newTerritory.claimedAt
-        ]
-      );
-      // Award 10 Arena Coins
-      await pool.query('UPDATE users SET coins = coins + 10 WHERE id = $1', [payload.userId]);
-      io.emit('feed:updated');
-    } catch (err: any) {
-      console.error('[DB] Failed to auto-generate territory post:', err.message);
-    }
-
-    // Update in-memory cache
-    territoriesCache.set(newTerritory.id, newTerritory);
-
-    // Broadcast to all clients
-    io.emit('territoryClaimed', newTerritory);
-    io.emit('territoriesUpdate', Array.from(territoriesCache.values()));
+  socket.on('territoryClaim', async (payload: ClaimPayload) => {
+    if (!requireSocketUser('territoryClaim', payload)) return;
+    await processTerritoryClaim(payload, (event, data) => socket.emit(event, data));
   });
 
   socket.on('disconnect', () => {
@@ -754,22 +867,15 @@ app.get('/health', async (req, res) => {
 });
 
 // --- Admin Monitoring Middleware ---
-const adminAuthMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  const token = req.headers['x-admin-token'];
-  const secret = process.env.ADMIN_SECRET_KEY || 'default_admin_secret_key_change_me';
-  if (token === secret) {
-    next();
-  } else {
-    res.status(401).json({ error: 'Unauthorized' });
-  }
-};
+// Refuses the public default key from source control (see auth.ts).
+const adminAuthMiddleware = requireAdmin;
 
 // --- Phase 2: Social REST Routes ---
 
 // Get merged, paginated social feed
-app.get('/api/feed', async (req, res) => {
+app.get('/api/feed', optionalAuth, async (req, res) => {
   try {
-    const userId = (req.query.userId as string) || '';
+    const userId = req.userId || '';
     const limit = parseInt(req.query.limit as string) || 20;
     const offset = parseInt(req.query.offset as string) || 0;
 
@@ -839,17 +945,26 @@ app.get('/api/feed', async (req, res) => {
 });
 
 // Create user post
-app.post('/api/posts', async (req, res) => {
-  const { userId, content, imageUrl, postType, relatedId } = req.body;
-  if (!userId || !content) {
-    return res.status(400).json({ error: 'Missing userId or content' });
+app.post('/api/posts', requireAuth, async (req, res) => {
+  const userId = req.userId!;
+  const content = typeof req.body.content === 'string' ? req.body.content.trim() : '';
+  const imageUrl = req.body.imageUrl;
+  if (!content && !imageUrl) {
+    return res.status(400).json({ error: 'Write something or attach a photo.' });
+  }
+  if (content.length > 2000) {
+    return res.status(400).json({ error: 'Post is too long (max 2000 characters).' });
+  }
+  if (imageUrl && !isOwnStorageImageUrl(imageUrl, userId)) {
+    return res.status(400).json({ error: 'Invalid image URL.' });
   }
   try {
+    // Users may only create plain posts; run/territory posts are server-generated.
     const result = await pool.query(
       `INSERT INTO posts (user_id, content, image_url, post_type, related_id)
        VALUES ($1, $2, $3, $4, $5)
        RETURNING id, user_id, content, image_url, post_type, related_id, created_at`,
-      [userId, content, imageUrl || null, postType || 'user', relatedId || null]
+      [userId, content, imageUrl || null, 'user', null]
     );
     io.emit('feed:updated');
     res.status(201).json(result.rows[0]);
@@ -859,19 +974,23 @@ app.post('/api/posts', async (req, res) => {
 });
 
 // Delete own post
-app.delete('/api/posts/:id', async (req, res) => {
+app.delete('/api/posts/:id', requireAuth, async (req, res) => {
   const postId = req.params.id;
-  const { userId } = req.body;
-  if (!userId) {
-    return res.status(400).json({ error: 'Missing userId' });
-  }
+  const userId = req.userId!;
+  if (!/^\d+$/.test(postId)) return res.status(404).json({ error: 'Post not found' });
   try {
+    const owner = await pool.query('SELECT user_id FROM posts WHERE id = $1', [postId]);
+    if (!owner.rowCount) return res.status(404).json({ error: 'Post not found' });
+    if (owner.rows[0].user_id !== userId) return res.status(403).json({ error: 'You can only delete your own posts.' });
+    // Remove dependent rows first so the delete succeeds without FK cascades.
+    await pool.query('DELETE FROM likes WHERE post_id = $1', [postId]);
+    await pool.query('DELETE FROM comments WHERE post_id = $1', [postId]);
     const result = await pool.query(
       'DELETE FROM posts WHERE id = $1 AND user_id = $2 RETURNING id',
       [postId, userId]
     );
     if (result.rowCount === 0) {
-      return res.status(404).json({ error: 'Post not found or unauthorized' });
+      return res.status(404).json({ error: 'Post not found' });
     }
     io.emit('feed:updated');
     res.json({ message: 'Post deleted successfully', id: postId });
@@ -881,13 +1000,13 @@ app.delete('/api/posts/:id', async (req, res) => {
 });
 
 // Toggle post like
-app.post('/api/posts/:id/like', async (req, res) => {
+app.post('/api/posts/:id/like', requireAuth, async (req, res) => {
   const postId = req.params.id;
-  const { userId } = req.body;
-  if (!userId) {
-    return res.status(400).json({ error: 'Missing userId' });
-  }
+  const userId = req.userId!;
+  if (!/^\d+$/.test(postId)) return res.status(404).json({ error: 'Post not found' });
   try {
+    const exists = await pool.query('SELECT 1 FROM posts WHERE id = $1', [postId]);
+    if (!exists.rowCount) return res.status(404).json({ error: 'Post not found' });
     const checkLike = await pool.query(
       'SELECT id FROM likes WHERE post_id = $1 AND user_id = $2',
       [postId, userId]
@@ -943,13 +1062,16 @@ app.get('/api/posts/:id/comments', async (req, res) => {
 });
 
 // Add comment to a post
-app.post('/api/posts/:id/comments', async (req, res) => {
+app.post('/api/posts/:id/comments', requireAuth, async (req, res) => {
   const postId = req.params.id;
-  const { userId, content } = req.body;
-  if (!userId || !content) {
-    return res.status(400).json({ error: 'Missing userId or content' });
-  }
+  const userId = req.userId!;
+  const content = typeof req.body.content === 'string' ? req.body.content.trim() : '';
+  if (!content) return res.status(400).json({ error: 'Comment cannot be empty.' });
+  if (content.length > 1000) return res.status(400).json({ error: 'Comment is too long (max 1000 characters).' });
+  if (!/^\d+$/.test(postId)) return res.status(404).json({ error: 'Post not found' });
   try {
+    const exists = await pool.query('SELECT 1 FROM posts WHERE id = $1', [postId]);
+    if (!exists.rowCount) return res.status(404).json({ error: 'Post not found' });
     const result = await pool.query(
       `INSERT INTO comments (post_id, user_id, content)
        VALUES ($1, $2, $3)
@@ -990,19 +1112,24 @@ app.post('/api/posts/:id/comments', async (req, res) => {
 });
 
 // Delete own comment
-app.delete('/api/comments/:id', async (req, res) => {
+app.delete('/api/comments/:id', requireAuth, async (req, res) => {
   const commentId = req.params.id;
-  const { userId } = req.body;
-  if (!userId) {
-    return res.status(400).json({ error: 'Missing userId' });
-  }
+  const userId = req.userId!;
+  if (!/^\d+$/.test(commentId)) return res.status(404).json({ error: 'Comment not found' });
   try {
-    const result = await pool.query(
-      'DELETE FROM comments WHERE id = $1 AND user_id = $2 RETURNING id',
-      [commentId, userId]
+    // Comment author OR the owner of the post may delete a comment.
+    const found = await pool.query(
+      'SELECT c.user_id AS author, p.user_id AS post_owner FROM comments c LEFT JOIN posts p ON p.id = c.post_id WHERE c.id = $1',
+      [commentId]
     );
+    if (!found.rowCount) return res.status(404).json({ error: 'Comment not found' });
+    const { author, post_owner } = found.rows[0];
+    if (author !== userId && post_owner !== userId) {
+      return res.status(403).json({ error: 'You can only delete your own comments.' });
+    }
+    const result = await pool.query('DELETE FROM comments WHERE id = $1 RETURNING id', [commentId]);
     if (result.rowCount === 0) {
-      return res.status(404).json({ error: 'Comment not found or unauthorized' });
+      return res.status(404).json({ error: 'Comment not found' });
     }
     res.json({ message: 'Comment deleted successfully', id: commentId });
   } catch (err: any) {
@@ -1031,7 +1158,7 @@ app.get('/api/profile/:userId', async (req, res) => {
     );
 
     const zonesRes = await pool.query(
-      `SELECT COUNT(*)::int AS total_zones FROM territories WHERE owner_id = $1`,
+      `SELECT COUNT(*)::int AS total_zones, COALESCE(SUM(area_square_meters),0)::float AS total_territory FROM territories WHERE owner_id = $1`,
       [userId]
     );
 
@@ -1071,12 +1198,15 @@ app.get('/api/profile/:userId', async (req, res) => {
         avatar_url: userRes.rows[0].avatar_url || '',
         cover_image_url: userRes.rows[0].cover_image_url || '',
         coins: userRes.rows[0].coins || 0,
-        unlocked_colors: userRes.rows[0].unlocked_colors || []
+        unlocked_colors: userRes.rows[0].unlocked_colors || [],
+        selected_avatar: userRes.rows[0].selected_avatar || null,
+        unlocked_avatars: userRes.rows[0].unlocked_avatars || []
       },
       stats: {
         total_distance: statsRes.rows[0]?.total_distance || 0,
         total_runs: statsRes.rows[0]?.total_runs || 0,
-        total_zones: zonesRes.rows[0]?.total_zones || 0
+        total_zones: zonesRes.rows[0]?.total_zones || 0,
+        total_territory: zonesRes.rows[0]?.total_territory || 0
       },
       posts: postsRes.rows,
       followers: followersRes.rows,
@@ -1110,12 +1240,15 @@ app.get('/api/profile/:userId', async (req, res) => {
 });
 
 // Followers API: Follow User
-app.post('/api/followers/follow', async (req, res) => {
-  const { userId, followingId } = req.body;
-  if (!userId || !followingId) return res.status(400).json({ error: 'Missing userId or followingId' });
+app.post('/api/followers/follow', requireAuth, async (req, res) => {
+  const userId = req.userId!;
+  const followingId = typeof req.body.followingId === 'string' ? req.body.followingId : '';
+  if (!followingId) return res.status(400).json({ error: 'Missing followingId' });
   if (userId === followingId) return res.status(400).json({ error: 'Cannot follow yourself' });
-  
+
   try {
+    const target = await pool.query('SELECT 1 FROM users WHERE id = $1', [followingId]);
+    if (!target.rowCount) return res.status(404).json({ error: 'User not found' });
     await pool.query(
       `INSERT INTO followers (follower_id, following_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
       [userId, followingId]
@@ -1145,9 +1278,10 @@ app.post('/api/followers/follow', async (req, res) => {
 });
 
 // Followers API: Unfollow User
-app.post('/api/followers/unfollow', async (req, res) => {
-  const { userId, followingId } = req.body;
-  if (!userId || !followingId) return res.status(400).json({ error: 'Missing userId or followingId' });
+app.post('/api/followers/unfollow', requireAuth, async (req, res) => {
+  const userId = req.userId!;
+  const followingId = typeof req.body.followingId === 'string' ? req.body.followingId : '';
+  if (!followingId) return res.status(400).json({ error: 'Missing followingId' });
   try {
     await pool.query(`DELETE FROM followers WHERE follower_id = $1 AND following_id = $2`, [userId, followingId]);
     res.json({ success: true });
@@ -1175,9 +1309,10 @@ app.get('/api/followers/:userId', async (req, res) => {
 });
 
 // Shop API: Unlock custom zone colors
-app.post('/api/shop/unlock-color', async (req, res) => {
-  const { userId, color } = req.body;
-  if (!userId || !color) {
+app.post('/api/shop/unlock-color', requireAuth, async (req, res) => {
+  const userId = req.userId!;
+  const { color } = req.body;
+  if (!color || typeof color !== 'string' || !/^#[0-9a-fA-F]{3,8}$/.test(color)) {
     return res.status(400).json({ error: 'Missing userId or color' });
   }
   try {
@@ -1226,9 +1361,8 @@ const PREMIUM_AVATARS: { avatar: string; name: string; cost: number }[] = [
 ];
 
 // Check and grant milestone avatars automatically
-app.post('/api/shop/check-milestones', async (req, res) => {
-  const { userId } = req.body;
-  if (!userId) return res.status(400).json({ error: 'Missing userId' });
+app.post('/api/shop/check-milestones', requireAuth, async (req, res) => {
+  const userId = req.userId!;
   try {
     const userRes = await pool.query(
       'SELECT unlocked_avatars FROM users WHERE id = $1',
@@ -1265,9 +1399,10 @@ app.post('/api/shop/check-milestones', async (req, res) => {
 });
 
 // Unlock a premium avatar with coins
-app.post('/api/shop/unlock-avatar', async (req, res) => {
-  const { userId, avatar } = req.body;
-  if (!userId || !avatar) return res.status(400).json({ error: 'Missing userId or avatar' });
+app.post('/api/shop/unlock-avatar', requireAuth, async (req, res) => {
+  const userId = req.userId!;
+  const { avatar } = req.body;
+  if (!avatar) return res.status(400).json({ error: 'Missing avatar' });
 
   const premiumAvatar = PREMIUM_AVATARS.find(a => a.avatar === avatar);
   if (!premiumAvatar) return res.status(400).json({ error: 'Invalid premium avatar' });
@@ -1301,9 +1436,10 @@ app.post('/api/shop/unlock-avatar', async (req, res) => {
 });
 
 // Set the user's active/selected avatar
-app.post('/api/shop/set-avatar', async (req, res) => {
-  const { userId, avatar } = req.body;
-  if (!userId || !avatar) return res.status(400).json({ error: 'Missing userId or avatar' });
+app.post('/api/shop/set-avatar', requireAuth, async (req, res) => {
+  const userId = req.userId!;
+  const { avatar } = req.body;
+  if (!avatar) return res.status(400).json({ error: 'Missing avatar' });
 
   try {
     const userRes = await pool.query(
@@ -1432,7 +1568,9 @@ app.get('/territories', async (req, res) => {
 });
 
 // REST: Get global leaderboard ranked by selected activity type and metric
-app.get('/leaderboard', async (req, res) => {
+app.get('/leaderboard', optionalAuth, async (req, res) => {
+  const friendsOnly = req.query.scope === 'friends';
+  if (friendsOnly && !req.userId) return res.status(401).json({ error: 'Log in to see your friends leaderboard.', code: 'TOKEN_MISSING' });
   try {
     if (isDbConnected) {
       const allowedActivities = ['all', 'run', 'walk', 'cycle'];
@@ -1481,11 +1619,13 @@ app.get('/leaderboard', async (req, res) => {
           WHERE 1=1 ${runFilter}
           GROUP BY user_id
         ) r_calc ON r_calc.user_id = u.id
+        ${friendsOnly ? 'WHERE u.id = $1 OR u.id IN (SELECT following_id FROM followers WHERE follower_id = $1)' : ''}
         ORDER BY ${orderByColumn} DESC
-        LIMIT 20
+        LIMIT ${friendsOnly ? 100 : 20}
       `;
 
-      const result = await pool.query(queryText);
+      const result = await pool.query(queryText, friendsOnly ? [req.userId] : []);
+      if (friendsOnly) return res.json(result.rows);
       if (result.rows && result.rows.length > 0) {
         return res.json(result.rows);
       }
@@ -1572,11 +1712,40 @@ app.get('/profile/:userId', async (req, res) => {
 });
 
 // REST: Update user profile (supports both /profile/update and /api/profile/update)
-app.post(['/profile/update', '/api/profile/update'], async (req, res) => {
+app.post(['/profile/update', '/api/profile/update'], requireAuth, async (req, res) => {
   try {
-    const { userId, displayName, characterType, color, bio, avatarUrl, coverImageUrl } = req.body;
-    if (!userId) {
-      return res.status(400).json({ error: 'userId is required' });
+    const userId = req.userId!;
+    const { characterType, color } = req.body;
+    let { displayName, bio, avatarUrl, coverImageUrl } = req.body;
+    if (displayName !== undefined) {
+      displayName = String(displayName).trim();
+      if (displayName.length < 2 || displayName.length > 40) return res.status(400).json({ error: 'Display name must be 2–40 characters.' });
+    }
+    if (bio !== undefined) {
+      bio = String(bio).trim();
+      if (bio.length > 160) return res.status(400).json({ error: 'Bio must be 160 characters or fewer.' });
+    }
+    if (color !== undefined && !/^#[0-9a-fA-F]{3,8}$/.test(String(color))) return res.status(400).json({ error: 'Invalid color.' });
+    if (characterType !== undefined && !/^[a-z_]{2,20}$/i.test(String(characterType))) return res.status(400).json({ error: 'Invalid class.' });
+    // Image fields: '' clears, otherwise must be the caller's own Storage object.
+    for (const [key, val] of [['avatarUrl', avatarUrl], ['coverImageUrl', coverImageUrl]] as const) {
+      if (val !== undefined && val !== '' && !isOwnStorageImageUrl(val, userId)) {
+        return res.status(400).json({ error: `Invalid ${key}.` });
+      }
+    }
+    const clearAvatar = avatarUrl === '';
+    const clearCover = coverImageUrl === '';
+    if (clearAvatar || clearCover) {
+      if (isDbConnected) {
+        await pool.query(
+          `UPDATE users SET avatar_url = CASE WHEN $2 THEN NULL ELSE avatar_url END,
+                            cover_image_url = CASE WHEN $3 THEN NULL ELSE cover_image_url END WHERE id = $1`,
+          [userId, clearAvatar, clearCover]
+        );
+      }
+      localStore.upsertUser(userId, { ...(clearAvatar ? { avatar_url: '' } : {}), ...(clearCover ? { cover_image_url: '' } : {}) });
+      if (clearAvatar) avatarUrl = undefined;
+      if (clearCover) coverImageUrl = undefined;
     }
     localStore.upsertUser(userId, {
       display_name: displayName,
@@ -1611,43 +1780,179 @@ app.post(['/profile/update', '/api/profile/update'], async (req, res) => {
   }
 });
 
-// REST: Get run history for a player
+// ─── Runs ─────────────────────────────────────────────────────────────────────
+
+function summarizeRoute(points: any[]): { durationSeconds: number; startedAt: number | null } {
+  if (!Array.isArray(points) || points.length < 2) return { durationSeconds: 0, startedAt: null };
+  const ts = points.map((p: any) => Number(p?.timestamp)).filter(Number.isFinite);
+  if (ts.length < 2) return { durationSeconds: 0, startedAt: null };
+  return { durationSeconds: Math.max(0, Math.round((Math.max(...ts) - Math.min(...ts)) / 1000)), startedAt: Math.min(...ts) };
+}
+
+function runSummaryRow(row: any) {
+  const { durationSeconds } = summarizeRoute(row.route_points || []);
+  const km = (row.distance_meters || 0) / 1000;
+  return {
+    id: row.id,
+    distance_meters: row.distance_meters || 0,
+    activity_type: row.activity_type || 'run',
+    created_at: row.created_at,
+    duration_seconds: durationSeconds,
+    pace_seconds_per_km: km > 0.01 && durationSeconds > 0 ? Math.round(durationSeconds / km) : null,
+    avg_speed_kmh: durationSeconds > 0 ? +(km / (durationSeconds / 3600)).toFixed(1) : null,
+  };
+}
+
+// Submit a finished run (+ optional territory claim). Idempotent: retrying the
+// same run (same first GPS timestamp + point count) returns the original result.
+const recentRunKeys = new Map<string, { runId: any; claim: string | null; at: number }>();
+app.post('/api/runs', requireAuth, async (req, res) => {
+  const userId = req.userId!;
+  const route = sanitizeRoute(req.body?.routePoints);
+  if (route.length < 2) return res.status(400).json({ error: 'A run needs at least 2 GPS points.' });
+  const activityType = ALLOWED_ACTIVITIES.has(String(req.body?.activityType)) ? req.body.activityType : 'run';
+  const key = `${userId}:${route[0].timestamp}:${route.length}`;
+
+  const cached = recentRunKeys.get(key);
+  if (cached) return res.json({ runId: cached.runId, claim: cached.claim, duplicate: true });
+
+  try {
+    if (isDbConnected) {
+      // Durable de-duplication across restarts (no schema change needed).
+      const dup = await pool.query(
+        `SELECT id FROM runs WHERE user_id = $1 AND (route_points->0->>'timestamp')::bigint = $2
+           AND jsonb_array_length(route_points) = $3 LIMIT 1`,
+        [userId, route[0].timestamp, route.length]
+      );
+      if (dup.rowCount) {
+        recentRunKeys.set(key, { runId: dup.rows[0].id, claim: null, at: Date.now() });
+        return res.json({ runId: dup.rows[0].id, claim: null, duplicate: true });
+      }
+    }
+
+    const runId = await recordRun({ userId, routePoints: route as any, distanceMeters: 0, activityType });
+    let claim: string | null = null;
+    let claimReason: string | null = null;
+    let claimArea = 0;
+    if (req.body?.claim && route.length >= 3) {
+      const claimPayload: any = {
+          userId,
+          runSessionId: String(req.body.claim.runSessionId || `session_${route[0].timestamp}`),
+          polygonCoordinates: route,
+          areaSquareMeters: 0,
+          color: req.body.claim.color,
+          activityType,
+        };
+      claim = await processTerritoryClaim(
+        claimPayload,
+        (event, data) => {
+          if (event === 'claim:rejected' || event === 'claim:lost') claimReason = data?.reason || null;
+          const sid = userToSocket.get(userId);
+          if (sid) io.to(sid).emit(event, data);
+        }
+      );
+      if (claim === 'claimed') claimArea = Math.round(claimPayload.areaSquareMeters || 0);
+    }
+    recentRunKeys.set(key, { runId, claim, at: Date.now() });
+    if (recentRunKeys.size > 5000) {
+      for (const [k, v] of recentRunKeys) if (Date.now() - v.at > 24 * 3600 * 1000) recentRunKeys.delete(k);
+    }
+    const distanceMeters = calculateDistance(route);
+    res.status(201).json({ runId, claim, claimReason, claimArea, distanceMeters, ...summarizeRoute(route) });
+  } catch (err: any) {
+    console.error('[Runs] submit error:', err.message);
+    res.status(500).json({ error: 'Could not save the run. It will be retried.' });
+  }
+});
+
+// REST: Get run history for a player (summaries only — no GPS routes)
 app.get('/runs/:userId', async (req, res) => {
   const { userId } = req.params;
   try {
     if (isDbConnected) {
       const result = await pool.query(`
-        SELECT id, distance_meters, created_at
+        SELECT id, distance_meters, activity_type, created_at, route_points
         FROM runs
         WHERE user_id = $1
         ORDER BY created_at DESC
         LIMIT 50
       `, [userId]);
-      if (result.rows && result.rows.length > 0) return res.json(result.rows);
+      return res.json(result.rows.map(runSummaryRow));
     }
   } catch (err: any) {
     console.warn('[Runs] DB query warning:', err.message);
   }
   const localRuns = localStore.getUserRuns(userId);
-  res.json(localRuns.slice(0, 50));
+  res.json(localRuns.slice(0, 50).map(runSummaryRow));
 });
 
-// REST: Get a single run's full details (including coordinates)
-app.get('/runs/details/:runId', async (req, res) => {
+// REST: Get a single run's details. The GPS route is private to its owner
+// (it can reveal home/work locations); others get the summary only.
+app.get('/runs/details/:runId', optionalAuth, async (req, res) => {
   try {
     const { runId } = req.params;
+    if (!/^\d+$/.test(runId)) return res.status(404).json({ error: 'Run not found' });
     const result = await pool.query(`
-      SELECT id, user_id, route_points, distance_meters, created_at
+      SELECT id, user_id, route_points, distance_meters, activity_type, created_at
       FROM runs
       WHERE id = $1
     `, [runId]);
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Run not found' });
     }
-    res.json(result.rows[0]);
+    const row = result.rows[0];
+    const isOwner = !!req.userId && req.userId === row.user_id;
+    res.json({ ...runSummaryRow(row), user_id: row.user_id, route_points: isOwner ? row.route_points : [], route_visible: isOwner });
   } catch (err: any) {
     console.error('[API] /runs/details error:', err.message);
     res.status(500).json({ error: 'Failed to load run details' });
+  }
+});
+
+// Achievements computed from persisted data only (runs, territories, posts,
+// followers). Nothing here is client-side or fabricated.
+app.get('/api/profile/:userId/achievements', async (req, res) => {
+  const { userId } = req.params;
+  try {
+    const [runs, zones, posts, followers, maxRun] = await Promise.all([
+      pool.query(`SELECT COUNT(*)::int AS n, COALESCE(SUM(distance_meters),0)::float AS d FROM runs WHERE user_id = $1`, [userId]),
+      pool.query(`SELECT COUNT(*)::int AS n, COALESCE(SUM(area_square_meters),0)::float AS a FROM territories WHERE owner_id = $1`, [userId]),
+      pool.query(`SELECT COUNT(*)::int AS n FROM posts WHERE user_id = $1 AND post_type = 'user'`, [userId]),
+      pool.query(`SELECT COUNT(*)::int AS n FROM followers WHERE following_id = $1`, [userId]),
+      pool.query(`SELECT COALESCE(MAX(distance_meters),0)::float AS m FROM runs WHERE user_id = $1`, [userId]),
+    ]);
+    const totalKm = runs.rows[0].d / 1000;
+    const defs = [
+      { id: 'first_run', icon: '👟', title: 'First Steps', description: 'Complete your first activity', progress: runs.rows[0].n, target: 1 },
+      { id: 'runs_10', icon: '🔟', title: 'Regular', description: 'Complete 10 activities', progress: runs.rows[0].n, target: 10 },
+      { id: 'km_10', icon: '🛣️', title: '10K Club', description: 'Cover 10 km in total', progress: +totalKm.toFixed(2), target: 10 },
+      { id: 'km_100', icon: '🏔️', title: 'Centurion', description: 'Cover 100 km in total', progress: +totalKm.toFixed(2), target: 100 },
+      { id: 'long_5k', icon: '🔥', title: 'Long Haul', description: 'Cover 5 km in a single activity', progress: +(maxRun.rows[0].m / 1000).toFixed(2), target: 5 },
+      { id: 'first_zone', icon: '🚩', title: 'Flag Planter', description: 'Hold your first territory', progress: zones.rows[0].n, target: 1 },
+      { id: 'zones_10', icon: '🏰', title: 'Warlord', description: 'Hold 10 territories at once', progress: zones.rows[0].n, target: 10 },
+      { id: 'first_post', icon: '📣', title: 'Voice of the Arena', description: 'Publish your first post', progress: posts.rows[0].n, target: 1 },
+      { id: 'followers_10', icon: '⭐', title: 'Rising Star', description: 'Reach 10 followers', progress: followers.rows[0].n, target: 10 },
+    ];
+    res.json(defs.map(d => ({ ...d, earned: d.progress >= d.target })));
+  } catch (err: any) {
+    console.error('[Achievements] error:', err.message);
+    res.status(500).json({ error: 'Could not load achievements' });
+  }
+});
+
+// Search users by display name (public profile fields only).
+app.get('/api/users/search', async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  if (q.length < 2) return res.json([]);
+  try {
+    const r = await pool.query(
+      `SELECT id, display_name, avatar_url, character_type, color, bio FROM users
+       WHERE display_name ILIKE $1 ORDER BY display_name LIMIT 20`,
+      ['%' + q.replace(/[%_\\]/g, '\\$&') + '%']
+    );
+    res.json(r.rows);
+  } catch (err: any) {
+    res.status(500).json({ error: 'Search failed' });
   }
 });
 
@@ -1930,131 +2235,212 @@ app.get('/api/admin/analytics', adminAuthMiddleware, async (req, res) => {
 const PORT = process.env.PORT || 3000;
 
 const expo = new Expo();
-const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_runwars_key_123';
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// Auth: Register (with resilient local persistence)
+function newUserId(): string {
+  return 'usr_' + Date.now().toString(36) + crypto.randomBytes(3).toString('hex');
+}
+
+function publicUser(u: any) {
+  return {
+    id: u.id,
+    email: u.email || null,
+    display_name: u.display_name || 'Runner',
+    character_type: u.character_type || 'scout',
+    color: u.color || '#00BFFF',
+    avatar_url: u.avatar_url || '',
+  };
+}
+
+async function findUserByEmail(cleanEmail: string): Promise<any | null> {
+  if (isDbConnected) {
+    try {
+      const r = await pool.query('SELECT * FROM users WHERE lower(email) = $1 LIMIT 1', [cleanEmail]);
+      if (r.rowCount) return r.rows[0];
+      return null;
+    } catch (e: any) {
+      console.warn('[Auth] DB lookup warning:', e.message);
+    }
+  }
+  return localStore.getUserByEmail(cleanEmail) || null;
+}
+
+async function findUserById(id: string): Promise<any | null> {
+  if (isDbConnected) {
+    try {
+      const r = await pool.query('SELECT * FROM users WHERE id = $1', [id]);
+      return r.rowCount ? r.rows[0] : null;
+    } catch (e: any) {
+      console.warn('[Auth] DB lookup warning:', e.message);
+    }
+  }
+  return localStore.getUserById(id) || null;
+}
+
+// Simple in-memory brute-force throttle for credential endpoints.
+const authAttempts = new Map<string, { count: number; resetAt: number }>();
+function authRateLimited(key: string, max = 10, windowMs = 15 * 60 * 1000): boolean {
+  const now = Date.now();
+  const entry = authAttempts.get(key);
+  if (!entry || entry.resetAt < now) {
+    authAttempts.set(key, { count: 1, resetAt: now + windowMs });
+    return false;
+  }
+  entry.count++;
+  return entry.count > max;
+}
+
+// Auth: Register
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { email, password, displayName, characterType, color } = req.body;
-    if (!email || !password || !displayName) return res.status(400).json({ error: 'Missing fields' });
-    
-    const cleanEmail = email.trim().toLowerCase();
-    const existingLocal = localStore.getUserByEmail(cleanEmail);
-    if (existingLocal) {
-      return res.status(400).json({ error: 'Email in use' });
+    const { email, password, displayName, characterType, color } = req.body || {};
+    if (!email || !password || !displayName) return res.status(400).json({ error: 'Email, password and display name are required.' });
+    const cleanEmail = String(email).trim().toLowerCase();
+    const name = String(displayName).trim();
+    if (!EMAIL_RE.test(cleanEmail)) return res.status(400).json({ error: 'Enter a valid email address.' });
+    if (String(password).length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+    if (name.length < 2 || name.length > 40) return res.status(400).json({ error: 'Display name must be 2–40 characters.' });
+    if (authRateLimited(`register:${req.ip}`, 20)) return res.status(429).json({ error: 'Too many attempts. Try again later.' });
+
+    if (await findUserByEmail(cleanEmail)) {
+      return res.status(409).json({ error: 'An account with this email already exists.' });
     }
 
-    if (isDbConnected) {
-      try {
-        const existing = await pool.query('SELECT id FROM users WHERE email = $1', [cleanEmail]);
-        if (existing.rowCount && existing.rowCount > 0) return res.status(400).json({ error: 'Email in use' });
-      } catch (e: any) {
-        console.warn('[Register] DB check warning:', e.message);
-      }
-    }
-
-    const passwordHash = await bcrypt.hash(password, 10);
-    const id = 'usr_' + Date.now().toString(36);
-    
+    const passwordHash = await bcrypt.hash(String(password), 10);
+    const id = newUserId();
     const newUser: LocalUser = {
       id,
       email: cleanEmail,
-      display_name: displayName.trim(),
+      display_name: name,
       character_type: characterType || 'scout',
-      color: color || '#00BFFF',
+      color: /^#[0-9a-fA-F]{3,8}$/.test(String(color)) ? color : '#00BFFF',
       password_hash: passwordHash,
       coins: 100,
       created_at: new Date().toISOString()
     };
-    localStore.saveUser(newUser);
 
     if (isDbConnected) {
-      try {
-        await pool.query(
-          `INSERT INTO users (id, email, display_name, character_type, color, password_hash)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
-          [id, cleanEmail, displayName.trim(), characterType || 'scout', color || '#00BFFF', passwordHash]
-        );
-      } catch (e: any) {
-        console.warn('[Register] DB insert warning:', e.message);
-      }
+      await pool.query(
+        `INSERT INTO users (id, email, display_name, character_type, color, password_hash)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [id, cleanEmail, name, newUser.character_type, newUser.color, passwordHash]
+      );
     }
+    localStore.saveUser(newUser);
 
-    const token = jwt.sign({ userId: id }, JWT_SECRET, { expiresIn: '30d' });
-    console.log(`✅ [Auth] User registered: ${displayName} (${cleanEmail}) [ID: ${id}]`);
-    res.json({ user: { id, display_name: displayName.trim(), character_type: newUser.character_type, color: newUser.color }, token });
+    console.log(`✅ [Auth] User registered [ID: ${id}]`);
+    res.status(201).json({ user: publicUser(newUser), token: signUserToken(id) });
   } catch (err: any) {
-    console.error('[Register] Error:', err);
-    res.status(500).json({ error: err.message });
+    console.error('[Register] Error:', err.message);
+    res.status(500).json({ error: 'Registration failed. Please try again.' });
   }
 });
 
-// Auth: Login (with auto-create fallback & resilient local persistence)
+// Auth: Login (email + password only; never auto-creates accounts)
 app.post('/api/auth/login', async (req, res) => {
   try {
-    const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ error: 'Missing fields' });
-    
-    const cleanEmail = email.trim().toLowerCase();
-    let user: LocalUser | undefined = localStore.getUserByEmail(cleanEmail) || localStore.getUserById(email.trim());
-
-    if (!user && isDbConnected) {
-      try {
-        const userRes = await pool.query('SELECT * FROM users WHERE email = $1 OR id = $1', [email]);
-        if (userRes.rowCount && userRes.rowCount > 0) {
-          const row = userRes.rows[0];
-          user = localStore.upsertUser(row.id, {
-            email: row.email,
-            display_name: row.display_name,
-            character_type: row.character_type,
-            color: row.color,
-            password_hash: row.password_hash,
-            coins: row.coins || 100
-          });
-        }
-      } catch (e: any) {
-        console.warn('[Login] DB check warning:', e.message);
-      }
+    const { email, password } = req.body || {};
+    if (!email || !password) return res.status(400).json({ error: 'Email and password are required.' });
+    const cleanEmail = String(email).trim().toLowerCase();
+    if (authRateLimited(`login:${cleanEmail}`) || authRateLimited(`login-ip:${req.ip}`, 50)) {
+      return res.status(429).json({ error: 'Too many login attempts. Try again in 15 minutes.' });
     }
 
-    // Auto-create tester account on the fly if not yet registered
+    const user = await findUserByEmail(cleanEmail);
+    if (!user) return res.status(401).json({ error: 'Incorrect email or password.' });
+    if (!user.password_hash) {
+      return res.status(401).json({ error: 'This account uses Google sign-in. Use "Continue with Google".' });
+    }
+    const isValid = await bcrypt.compare(String(password), user.password_hash);
+    if (!isValid) return res.status(401).json({ error: 'Incorrect email or password.' });
+
+    localStore.upsertUser(user.id, {
+      email: user.email, display_name: user.display_name, character_type: user.character_type,
+      color: user.color, password_hash: user.password_hash,
+    });
+    console.log(`✅ [Auth] User logged in [ID: ${user.id}]`);
+    res.json({ user: publicUser(user), token: signUserToken(user.id) });
+  } catch (err: any) {
+    console.error('[Login] Error:', err.message);
+    res.status(500).json({ error: 'Login failed. Please try again.' });
+  }
+});
+
+// Auth: Google — exchange a verified Firebase ID token for a backend session.
+app.post('/api/auth/google', async (req, res) => {
+  const idToken = req.body?.idToken;
+  if (!idToken || typeof idToken !== 'string') return res.status(400).json({ error: 'Missing idToken' });
+  let decoded: any;
+  try {
+    decoded = await verifyFirebaseIdToken(idToken);
+  } catch (e: any) {
+    console.warn('[Auth] Google token rejected:', e?.code || e?.message);
+    return res.status(401).json({ error: 'Google sign-in could not be verified.', code: 'TOKEN_INVALID' });
+  }
+  try {
+    const uid: string = decoded.uid;
+    const email: string | null = decoded.email ? String(decoded.email).toLowerCase() : null;
+    // 1) Existing Google user keyed by Firebase uid.
+    let user = await findUserById(uid);
+    // 2) Existing account with the same VERIFIED email → same person.
+    if (!user && email && decoded.email_verified) user = await findUserByEmail(email);
+    // 3) New account keyed by Firebase uid (so Storage rules match auth.uid).
     if (!user) {
-      console.log(`ℹ️ [Auth] User ${cleanEmail} not found. Auto-creating tester account on first login...`);
-      const passwordHash = await bcrypt.hash(password, 10);
-      const id = 'usr_' + Date.now().toString(36);
-      const displayName = cleanEmail.split('@')[0] || 'Runner';
       user = {
-        id,
-        email: cleanEmail,
-        display_name: displayName,
+        id: uid,
+        email,
+        display_name: String(decoded.name || (email ? email.split('@')[0] : 'Runner')).slice(0, 40),
         character_type: 'scout',
         color: '#00BFFF',
-        password_hash: passwordHash,
-        coins: 100,
-        created_at: new Date().toISOString()
       };
-      localStore.saveUser(user);
-    } else if (user.password_hash) {
-      const isValid = await bcrypt.compare(password, user.password_hash);
-      if (!isValid) return res.status(401).json({ error: 'Invalid password' });
+      if (isDbConnected) {
+        await pool.query(
+          `INSERT INTO users (id, email, display_name, character_type, color) VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (id) DO NOTHING`,
+          [user.id, user.email, user.display_name, user.character_type, user.color]
+        );
+      }
+      localStore.upsertUser(user.id, user);
+      console.log(`✅ [Auth] Google user created [ID: ${user.id}]`);
     }
-
-    const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '30d' });
-    console.log(`✅ [Auth] User logged in: ${user.display_name} (${user.email}) [ID: ${user.id}]`);
-    res.json({ 
-      user: { id: user.id, display_name: user.display_name, character_type: user.character_type, color: user.color }, 
-      token 
-    });
+    res.json({ user: publicUser(user), token: signUserToken(user.id) });
   } catch (err: any) {
-    console.error('[Login] Error:', err);
-    res.status(500).json({ error: err.message });
+    console.error('[Auth] Google sign-in error:', err.message);
+    res.status(500).json({ error: 'Google sign-in failed. Please try again.' });
   }
+});
+
+// Auth: current session (used by the app to validate a stored token).
+app.get('/api/auth/me', requireAuth, async (req, res) => {
+  const user = await findUserById(req.userId!);
+  if (!user) return res.status(401).json({ error: 'Account not found.', code: 'TOKEN_INVALID' });
+  res.json({ user: publicUser(user) });
+});
+
+// Auth: Firebase custom token so every signed-in user (incl. email/password)
+// gets a Firebase Auth session whose uid === backend user id.
+app.post('/api/auth/firebase-token', requireAuth, async (req, res) => {
+  try {
+    const firebaseToken = await createFirebaseCustomToken(req.userId!);
+    res.json({ firebaseToken });
+  } catch (e: any) {
+    if (e?.code === 'FIREBASE_ADMIN_NOT_CONFIGURED') {
+      return res.status(503).json({ error: 'Photo uploads are not configured on the server yet.', code: e.code });
+    }
+    console.error('[Auth] firebase-token error:', e?.message);
+    res.status(500).json({ error: 'Could not start an upload session.' });
+  }
+});
+
+app.get('/api/auth/capabilities', (_req, res) => {
+  res.json({ firebaseUploads: firebaseCustomTokensEnabled() });
 });
 
 // Register Push Token
-app.post('/api/users/push-token', async (req, res) => {
-  const { userId, token } = req.body;
-  if (!userId || !token) return res.status(400).json({ error: 'Missing userId or token' });
+app.post('/api/users/push-token', requireAuth, async (req, res) => {
+  const userId = req.userId!;
+  const { token } = req.body;
+  if (!token || typeof token !== 'string' || !Expo.isExpoPushToken(token)) return res.status(400).json({ error: 'Invalid push token' });
   try {
     await pool.query('UPDATE users SET expo_push_token = $1 WHERE id = $2', [token, userId]);
     pushTokens.set(userId, token);
@@ -2064,45 +2450,9 @@ app.post('/api/users/push-token', async (req, res) => {
   }
 });
 
-// Follow User
-app.post('/api/followers/follow', async (req, res) => {
-  const { userId, followingId } = req.body;
-  if (!userId || !followingId) return res.status(400).json({ error: 'Missing userId or followingId' });
-  if (userId === followingId) return res.status(400).json({ error: 'Cannot follow yourself' });
-  
-  try {
-    await pool.query(
-      `INSERT INTO followers (follower_id, following_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-      [userId, followingId]
-    );
-
-    try {
-      const userRes = await pool.query('SELECT display_name FROM users WHERE id = $1', [userId]);
-      const targetTokenRes = await pool.query('SELECT expo_push_token FROM users WHERE id = $1', [followingId]);
-      
-      const pushToken = targetTokenRes.rows[0]?.expo_push_token;
-      if (pushToken && Expo.isExpoPushToken(pushToken)) {
-        const adderName = userRes.rows[0]?.display_name || 'A runner';
-        await expo.sendPushNotificationsAsync([{
-          to: pushToken,
-          sound: 'default',
-          title: '🤝 New Follower!',
-          body: `${adderName} started following you!`,
-        }]);
-      }
-    } catch (pushErr) {
-      console.error('[Push] Follow notification failed:', pushErr);
-    }
-    res.json({ success: true });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // Arena Coin Boost
-app.post('/api/territory/boost', async (req, res) => {
-  const { userId } = req.body;
-  if (!userId) return res.status(400).json({ error: 'Missing userId' });
+app.post('/api/territory/boost', requireAuth, async (req, res) => {
+  const userId = req.userId!;
   try {
     if (isDbConnected) {
       const userRes = await pool.query('SELECT coins FROM users WHERE id = $1', [userId]);

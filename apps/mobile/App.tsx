@@ -18,7 +18,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { StatusBar } from 'expo-status-bar';
 import { View, Text, ActivityIndicator, StyleSheet, Platform } from 'react-native';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as SplashScreen from 'expo-splash-screen';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
@@ -57,34 +57,31 @@ function AuthNavigator() {
 
 function MainNavigator() {
   const { user } = useAuth();
+  const insets = useSafeAreaInsets();
 
   return (
     <MainTab.Navigator
       initialRouteName="MAP"
       screenOptions={{
         headerShown: false,
+        // Docked (not absolute): screens never render underneath the bar.
         tabBarStyle: {
-          backgroundColor: 'rgba(10, 10, 20, 0.96)',
-          borderTopColor: 'rgba(255, 255, 255, 0.1)',
-          borderTopWidth: 1.2,
-          height: Platform.OS === 'ios' ? 88 : 74,
-          paddingBottom: Platform.OS === 'ios' ? 24 : 12,
-          paddingTop: 8,
-          position: 'absolute',
-          elevation: 16,
-          shadowColor: '#000000',
-          shadowOffset: { width: 0, height: -4 },
-          shadowOpacity: 0.6,
-          shadowRadius: 12,
+          backgroundColor: COLORS.bgSurface,
+          borderTopColor: COLORS.border,
+          borderTopWidth: 1,
+          height: 64 + insets.bottom,
+          paddingBottom: Math.max(insets.bottom, 8),
+          paddingTop: 6,
+          elevation: 0,
         },
-        tabBarActiveTintColor: COLORS.neonGreen,
+        tabBarActiveTintColor: COLORS.primary,
         tabBarInactiveTintColor: COLORS.textMuted,
         tabBarLabelStyle: {
-          fontSize: 9,
-          fontWeight: '900',
-          letterSpacing: 0.8,
-          marginTop: 2,
+          fontSize: 10,
+          fontWeight: '700',
+          letterSpacing: 0.4,
         },
+        tabBarHideOnKeyboard: true,
       }}
     >
       {/* 1. MAP — Tactical Conquest Dashboard */}
@@ -95,7 +92,7 @@ function MainNavigator() {
           tabBarLabel: 'MAP',
           tabBarIcon: ({ focused }) => (
             <View style={focused ? styles.activeTabGlow : undefined}>
-              <Text style={{ fontSize: focused ? 22 : 19 }}>🌐</Text>
+              <Text style={{ fontSize: 20, opacity: focused ? 1 : 0.6 }}>🌐</Text>
             </View>
           ),
         }}
@@ -109,7 +106,7 @@ function MainNavigator() {
           tabBarLabel: 'COMPETE',
           tabBarIcon: ({ focused }) => (
             <View style={focused ? styles.activeTabGlow : undefined}>
-              <Text style={{ fontSize: focused ? 22 : 19 }}>⚔️</Text>
+              <Text style={{ fontSize: 20, opacity: focused ? 1 : 0.6 }}>⚔️</Text>
             </View>
           ),
         }}
@@ -145,7 +142,7 @@ function MainNavigator() {
           tabBarLabel: 'COMMUNITY',
           tabBarIcon: ({ focused }) => (
             <View style={focused ? styles.activeTabGlow : undefined}>
-              <Text style={{ fontSize: focused ? 22 : 19 }}>👥</Text>
+              <Text style={{ fontSize: 20, opacity: focused ? 1 : 0.6 }}>👥</Text>
             </View>
           ),
         }}
@@ -159,7 +156,7 @@ function MainNavigator() {
           tabBarLabel: 'PROFILE',
           tabBarIcon: ({ focused }) => (
             <View style={focused ? styles.activeTabGlow : undefined}>
-              <Text style={{ fontSize: focused ? 22 : 19 }}>
+              <Text style={{ fontSize: 20, opacity: focused ? 1 : 0.6 }}>
                 {user?.selectedAvatar ||
                   (user?.characterType ? (CHARACTER_EMOJI as any)[user.characterType] : '👤')}
               </Text>
@@ -187,7 +184,7 @@ function RootRouter() {
       <View style={styles.loadingContainer}>
         <Text style={styles.loadingLogo}>⚡</Text>
         <Text style={styles.loadingTitle}>STRIDECLASH</Text>
-        <Text style={styles.loadingSub}>INITIALIZING TACTICAL SATELLITE...</Text>
+        <Text style={styles.loadingSub}>Restoring your session…</Text>
         <ActivityIndicator color={COLORS.neonGreen} style={{ marginTop: 24 }} size="large" />
       </View>
     );
@@ -202,6 +199,11 @@ function RootRouter() {
             name="PostRun"
             component={PostRunScreen}
             options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
+          />
+          <RootStack.Screen
+            name="UserProfile"
+            component={ProfileScreen}
+            options={{ animation: 'slide_from_right' }}
           />
           <RootStack.Screen
             name="FollowersList"
@@ -258,9 +260,9 @@ const styles = StyleSheet.create({
     borderRadius: 27,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: Platform.OS === 'ios' ? 14 : 18,
-    borderWidth: 2.5,
-    borderColor: '#FFFFFF',
+    marginBottom: 14,
+    borderWidth: 3,
+    borderColor: COLORS.bgSurface,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.55,
     shadowRadius: 10,
@@ -271,7 +273,7 @@ const styles = StyleSheet.create({
     color: '#080811',
   },
   activeTabGlow: {
-    transform: [{ scale: 1.15 }],
+    transform: [{ scale: 1.06 }],
   },
   loadingContainer: {
     flex: 1,

@@ -185,7 +185,7 @@ export default function RegisterScreen({ navigation }: Props) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0D0D1A',
+    backgroundColor: '#0B1220',
   },
   scrollContent: {
     paddingHorizontal: 24,
@@ -199,7 +199,7 @@ const styles = StyleSheet.create({
     marginBottom: 24,
   },
   backButtonText: {
-    color: '#00BFFF',
+    color: '#38BDF8',
     fontSize: 16,
     fontWeight: '600',
   },
@@ -211,18 +211,18 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     fontSize: 14,
-    color: '#8888AA',
+    color: '#94A3B8',
     marginTop: 6,
   },
   formCard: {
-    backgroundColor: '#16162A',
+    backgroundColor: '#162238',
     borderRadius: 20,
     padding: 24,
     borderWidth: 1,
-    borderColor: '#2A2A4A',
+    borderColor: '#29384F',
   },
   formLabel: {
-    color: '#8888AA',
+    color: '#94A3B8',
     fontSize: 12,
     fontWeight: '600',
     letterSpacing: 1.5,
@@ -231,9 +231,9 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   input: {
-    backgroundColor: '#0D0D1A',
+    backgroundColor: '#0B1220',
     borderWidth: 1,
-    borderColor: '#2A2A4A',
+    borderColor: '#29384F',
     borderRadius: 12,
     paddingHorizontal: 16,
     paddingVertical: 14,
@@ -242,22 +242,22 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   inputError: {
-    borderColor: '#FF4D4D',
+    borderColor: '#EF4444',
   },
   errorHint: {
-    color: '#FF4D4D',
+    color: '#EF4444',
     fontSize: 12,
     marginTop: -12,
     marginBottom: 16,
     marginLeft: 4,
   },
   primaryButton: {
-    backgroundColor: '#00BFFF',
+    backgroundColor: '#38BDF8',
     borderRadius: 14,
     paddingVertical: 16,
     alignItems: 'center',
     marginTop: 8,
-    shadowColor: '#00BFFF',
+    shadowColor: '#38BDF8',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.4,
     shadowRadius: 12,
@@ -267,7 +267,7 @@ const styles = StyleSheet.create({
     opacity: 0.6,
   },
   primaryButtonText: {
-    color: '#0D0D1A',
+    color: '#0B1220',
     fontSize: 16,
     fontWeight: '800',
   },
@@ -277,11 +277,11 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   linkText: {
-    color: '#8888AA',
+    color: '#94A3B8',
     fontSize: 14,
   },
   linkTextAccent: {
-    color: '#00BFFF',
+    color: '#38BDF8',
     fontWeight: '700',
   },
 });

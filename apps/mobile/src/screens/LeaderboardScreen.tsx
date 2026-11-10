@@ -32,7 +32,7 @@ import {
   SHADOWS,
 } from '@/theme/tokens';
 import { GlassCard, StatBadge, PlayerAvatar } from '@/components/ui';
-import { apiFetch } from '@/config/api';
+import { apiFetch, errorMessage } from '@/config/api';
 
 interface LeaderboardEntry {
   id: string;
@@ -45,7 +45,7 @@ interface LeaderboardEntry {
   total_distance: number;
 }
 
-type ScopeFilter = 'global' | 'country' | 'city';
+type ScopeFilter = 'global' | 'friends';
 type ActivityFilter = 'all' | 'run' | 'walk' | 'cycle';
 type MetricFilter = 'territory' | 'distance' | 'zones';
 
@@ -60,20 +60,21 @@ export default function LeaderboardScreen() {
   const { territories } = useMultiplayer();
   const { user } = useAuth();
 
+  const [lbError, setLbError] = useState<string | null>(null);
   const fetchLeaderboard = useCallback(async () => {
     try {
-      const res = await apiFetch(`/leaderboard?activity=${activity}&metric=${metric}`);
-      if (res.ok) {
-        const data = await res.json();
-        setEntries(data);
-      }
-    } catch (err) {
-      console.error('[Leaderboard] Fetch error:', err);
+      const res = await apiFetch(`/leaderboard?activity=${activity}&metric=${metric}&scope=${scope}`);
+      if (!res.ok) throw new Error(await errorMessage(res, 'Could not load rankings.'));
+      const data = await res.json();
+      setEntries(Array.isArray(data) ? data : []);
+      setLbError(null);
+    } catch (err: any) {
+      setLbError(err?.message || 'Could not load rankings.');
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [activity, metric]);
+  }, [activity, metric, scope]);
 
   useEffect(() => {
     fetchLeaderboard();
@@ -118,7 +119,8 @@ export default function LeaderboardScreen() {
 
   const renderHeader = () => (
     <View style={styles.headerArea}>
-      {/* Scope Toggles: GLOBAL / COUNTRY / CITY */}
+      {/* Scope: everyone, or you + the runners you follow */}
+      {!!lbError && <Text style={{ color: '#EF4444', textAlign: 'center', marginBottom: 8 }}>{lbError}</Text>}
       <View style={styles.scopeRow}>
         <TouchableOpacity
           style={[styles.scopeBtn, scope === 'global' && styles.scopeBtnActive]}
@@ -130,20 +132,12 @@ export default function LeaderboardScreen() {
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[styles.scopeBtn, scope === 'country' && styles.scopeBtnActive]}
-          onPress={() => setScope('country')}
+          style={[styles.scopeBtn, scope === 'friends' && styles.scopeBtnActive]}
+          onPress={() => setScope('friends')}
+          testID="rank-scope-friends"
         >
-          <Text style={[styles.scopeText, scope === 'country' && styles.scopeTextActive]}>
-            COUNTRY 🇮🇳
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.scopeBtn, scope === 'city' && styles.scopeBtnActive]}
-          onPress={() => setScope('city')}
-        >
-          <Text style={[styles.scopeText, scope === 'city' && styles.scopeTextActive]}>
-            CITY 🏙️
+          <Text style={[styles.scopeText, scope === 'friends' && styles.scopeTextActive]}>
+            FRIENDS 🤝
           </Text>
         </TouchableOpacity>
       </View>
@@ -392,7 +386,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: COLORS.bgCanvas,
-    paddingTop: Platform.OS === 'ios' ? 52 : 44,
+    paddingTop: 8, // hub screen owns the safe area
   },
   screenHeader: {
     paddingHorizontal: SPACING.md,
@@ -415,7 +409,7 @@ const styles = StyleSheet.create({
   },
   scopeRow: {
     flexDirection: 'row',
-    backgroundColor: 'rgba(16, 16, 32, 0.9)',
+    backgroundColor: 'rgba(16, 27, 45, 0.9)',
     borderRadius: RADII.pill,
     padding: 3,
     borderWidth: 1,
@@ -458,7 +452,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   metricChipActive: {
-    backgroundColor: 'rgba(0, 191, 255, 0.18)',
+    backgroundColor: 'rgba(56, 189, 248, 0.18)',
     borderColor: COLORS.electricBlue,
   },
   metricChipText: {
@@ -495,7 +489,7 @@ const styles = StyleSheet.create({
     width: 52,
     height: 52,
     borderRadius: 26,
-    backgroundColor: '#16162D',
+    backgroundColor: '#162238',
     borderWidth: 2.5,
     alignItems: 'center',
     justifyContent: 'center',
@@ -520,7 +514,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   medalPillText: {
-    color: '#080811',
+    color: '#0B1220',
     fontSize: 10,
     fontWeight: '900',
   },
@@ -582,7 +576,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.04)',
   },
   activityPillActive: {
-    backgroundColor: 'rgba(0, 255, 136, 0.18)',
+    backgroundColor: 'rgba(34, 197, 94, 0.18)',
     borderWidth: 1,
     borderColor: COLORS.neonGreen,
   },
@@ -621,7 +615,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#16162D',
+    backgroundColor: '#162238',
     borderWidth: 2,
     alignItems: 'center',
     justifyContent: 'center',
@@ -646,7 +640,7 @@ const styles = StyleSheet.create({
   youTag: {
     fontSize: 9,
     fontWeight: '900',
-    color: '#080811',
+    color: '#0B1220',
     backgroundColor: COLORS.neonGreen,
     paddingHorizontal: 5,
     paddingVertical: 1,

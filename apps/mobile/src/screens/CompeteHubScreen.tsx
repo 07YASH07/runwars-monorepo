@@ -19,7 +19,7 @@ export default function CompeteHubScreen() {
 
   return (
     <SafeAreaView edges={['top']} style={styles.root}>
-      <StatusBar barStyle="light-content" backgroundColor="#0A0A14" />
+      <StatusBar barStyle="light-content" backgroundColor="#0B1220" />
       <View style={styles.pillRow}>
         <TouchableOpacity
           testID="compete-tab-battles"
@@ -52,7 +52,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: SPACING.md,
     paddingVertical: SPACING.sm,
     gap: 10,
-    backgroundColor: 'rgba(10,10,20,0.96)',
+    backgroundColor: 'rgba(11, 18, 32,0.96)',
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(255,255,255,0.08)',
     elevation: 12,
@@ -64,10 +64,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.12)',
-    backgroundColor: 'rgba(16,16,32,0.9)',
+    backgroundColor: 'rgba(16, 27, 45,0.9)',
   },
   pillActive: {
-    backgroundColor: 'rgba(0,255,136,0.18)',
+    backgroundColor: 'rgba(34, 197, 94,0.18)',
     borderColor: COLORS.neonGreen,
   },
   pillText: {

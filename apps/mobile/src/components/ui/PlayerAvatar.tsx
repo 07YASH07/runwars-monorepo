@@ -103,7 +103,7 @@ export const PlayerAvatar: React.FC<PlayerAvatarProps> = ({
 
 const styles = StyleSheet.create({
   avatarRing: {
-    backgroundColor: '#16162D',
+    backgroundColor: '#162238',
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',

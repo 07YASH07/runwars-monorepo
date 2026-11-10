@@ -29,6 +29,7 @@ import {
   StatusBar,
   Platform,
   DeviceEventEmitter,
+  ActivityIndicator,
   Dimensions,
 } from 'react-native';
 import {
@@ -51,9 +52,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '@/context/AuthContext';
 import { useMultiplayer } from '@/hooks/useMultiplayer';
 import { useNavigation } from '@react-navigation/native';
-import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import ConflictToast from '@/components/ConflictToast';
-import { registerForPushNotificationsAsync } from '@/services/NotificationService';
+import { RunSyncService } from '@/services/RunSyncService';
 import {
   COLORS,
   CLASS_THEMES,
@@ -240,9 +240,11 @@ export default function RunScreen() {
   const { user } = useAuth();
   const { livePlayers, territories, socketService } = useMultiplayer();
   const navigation = useNavigation<any>();
-  // Bottom tab bar is `position:absolute`, so screen content underlaps it.
-  // Pull its real height so the START button always clears it.
-  const tabBarHeight = useBottomTabBarHeight();
+  // GPS fix state: never claim a lock without a real, recent fix.
+  const [gpsFix, setGpsFix] = useState<{ accuracy: number; at: number } | null>(null);
+  const [, forceTick] = useState(0);
+  const centeredOnceRef = useRef(false);
+  const [syncNotice, setSyncNotice] = useState<string | null>(null);
 
   const [pendingRecovery, setPendingRecovery] = useState<StoredSession | null>(null);
   const [conflictVisible, setConflictVisible] = useState(false);
@@ -300,6 +302,7 @@ export default function RunScreen() {
       dispatch({ type: 'SET_ACCURACY', accuracy: 'low' });
       return;
     }
+    setGpsFix({ accuracy: accuracyMeters ?? (point as any).accuracy ?? 25, at: Date.now() });
     if (accuracyMeters !== undefined) {
       dispatch({
         type: 'SET_ACCURACY',
@@ -334,8 +337,6 @@ export default function RunScreen() {
 
   // Session Setup Effect
   useEffect(() => {
-    let pushToken: string | undefined;
-
     const setup = async () => {
       const { status: fgStatus } = await Location.requestForegroundPermissionsAsync();
       if (fgStatus !== 'granted') {
@@ -344,29 +345,18 @@ export default function RunScreen() {
       }
       await Location.requestBackgroundPermissionsAsync().catch(() => {});
 
-      pushToken = await registerForPushNotificationsAsync().catch(() => undefined);
-      if (pushToken && user?.uid) {
-        socketService.socket?.emit('registerPushToken', {
-          userId: user.uid,
-          token: pushToken,
-        });
-      }
-
-      socketService.socket?.on('territory:stolen', (data: { byPlayerName: string; byPlayerColor: string }) => {
-        setConflictDetails({ name: data.byPlayerName, color: data.byPlayerColor });
-        setConflictVisible(true);
-        setTimeout(() => setConflictVisible(false), 4500);
-      });
-
-      socketService.socket?.on('pvp:warning', (data: { message: string }) => {
-        Alert.alert(
-          '⚔️ ENEMY SECTOR ALERT',
-          data.message || 'You entered rival turf! Speed up or activate Arena Boost to contest it!',
-          [{ text: 'FIGHT ON', style: 'cancel' }],
-          { cancelable: true }
-        );
-      });
     };
+
+    const onStolen = (data: { byPlayerName: string; byPlayerColor: string }) => {
+      setConflictDetails({ name: data.byPlayerName, color: data.byPlayerColor });
+      setConflictVisible(true);
+      setTimeout(() => setConflictVisible(false), 4500);
+    };
+    const onPvpWarning = (data: { message: string }) => {
+      Alert.alert('⚔️ Rival territory', data.message || 'You entered rival turf!', [{ text: 'OK', style: 'cancel' }], { cancelable: true });
+    };
+    socketService.onEvent('territory:stolen', onStolen);
+    socketService.onEvent('pvp:warning', onPvpWarning);
 
     const bgSub = DeviceEventEmitter.addListener('backgroundLocationUpdate', ({ points, speedKmh }) => {
       points.forEach((pt: any) => {
@@ -377,11 +367,54 @@ export default function RunScreen() {
     setup();
 
     return () => {
-      socketService.socket?.off('territory:stolen');
-      socketService.socket?.off('pvp:warning');
+      socketService.offEvent('territory:stolen', onStolen);
+      socketService.offEvent('pvp:warning', onPvpWarning);
       bgSub.remove();
     };
   }, [user?.uid, socketService]);
+
+  // Idle GPS: get a real fix and centre the map before the run starts.
+  useEffect(() => {
+    if (state.isRunning) return;
+    let sub: Location.LocationSubscription | null = null;
+    let cancelled = false;
+    (async () => {
+      const perm = await Location.getForegroundPermissionsAsync();
+      if (perm.status !== 'granted' || cancelled) return;
+      sub = await Location.watchPositionAsync(
+        { accuracy: Location.Accuracy.High, distanceInterval: 3, timeInterval: 2000 },
+        (loc) => {
+          const acc = loc.coords.accuracy ?? 999;
+          setGpsFix({ accuracy: acc, at: Date.now() });
+          if (!centeredOnceRef.current && acc <= 100) {
+            centeredOnceRef.current = true;
+            mapRef.current?.animateToRegion({
+              latitude: loc.coords.latitude,
+              longitude: loc.coords.longitude,
+              latitudeDelta: 0.008,
+              longitudeDelta: 0.008,
+            }, 500);
+          }
+        }
+      ).catch(() => null);
+      if (cancelled) sub?.remove();
+    })();
+    return () => { cancelled = true; sub?.remove(); };
+  }, [state.isRunning]);
+
+  // Re-evaluate fix staleness every few seconds.
+  useEffect(() => {
+    const id = setInterval(() => forceTick(t => t + 1), 4000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Retry any runs that were saved offline.
+  useEffect(() => {
+    if (!user?.uid) return;
+    RunSyncService.flush(user.uid).catch(() => {});
+    const id = setInterval(() => RunSyncService.flush(user.uid).catch(() => {}), 60000);
+    return () => clearInterval(id);
+  }, [user?.uid]);
 
   // Keep stateRef current so interval callbacks always see the latest state
   useEffect(() => { stateRef.current = state; });
@@ -545,6 +578,8 @@ export default function RunScreen() {
   // Pause run
   const handlePause = useCallback(() => {
     stopTracking();
+    // Background GPS must stop too, or movement while paused is merged in at finish.
+    stopBackgroundTracking().catch(() => {});
     stopPulse();
     if (tickIntervalRef.current) {
       clearInterval(tickIntervalRef.current);
@@ -570,6 +605,7 @@ export default function RunScreen() {
   const handleResume = useCallback(async () => {
     lastPointRef.current = null; // prevent distance jump from pre-pause position
     await startTracking(handleLocationUpdate);
+    await startBackgroundTracking().catch(() => {});
     startPulse();
     if (tickIntervalRef.current) clearInterval(tickIntervalRef.current);
     tickIntervalRef.current = setInterval(() => {
@@ -618,50 +654,46 @@ export default function RunScreen() {
             const finalDistance = calculateDistance(mergedPoints);
             clearBackgroundPoints();
 
-            const mappedActivity = activityType === 'bike' ? 'cycle' : activityType;
+            const mappedActivity = (activityType === 'bike' ? 'cycle' : activityType) as 'run' | 'walk' | 'cycle';
+            const elapsed = state.elapsedSeconds;
+            const avgSpeed = elapsed > 0 ? (finalDistance / 1000) / (elapsed / 3600) : 0;
 
-            if (user) {
-              socketService.emitRunStop({
-                userId: user.uid,
-                routePoints: mergedPoints,
-                distanceMeters: finalDistance,
-                activityType: mappedActivity,
-              });
-            }
-
-            if (user?.uid && mergedPoints.length >= 2) {
-              const areaSquareMeters = finalDistance * 2;
-              const avgSpeed = state.elapsedSeconds > 0
-                ? (finalDistance / 1000) / (state.elapsedSeconds / 3600)
-                : 0;
-
-              socketService.emitTerritoryClaim({
-                userId: user.uid,
-                runSessionId: finishedSessionId || ('session_' + Date.now()),
-                polygonCoordinates: mergedPoints,
-                areaSquareMeters,
-                color: user.color || COLORS.neonGreen,
-                activityType: mappedActivity,
-              });
-
-              // Clear persisted session only after successful submission
+            if (!user?.uid || mergedPoints.length < 2) {
               await AsyncStorage.removeItem(SESSION_KEY).catch(() => {});
               submittingRef.current = false;
-
-              navigation.navigate('PostRun', {
-                distanceMeters: finalDistance,
-                elapsedSeconds: state.elapsedSeconds,
-                averageSpeedKmh: parseFloat(avgSpeed.toFixed(1)),
-                areaSquareMeters,
-                color: user.color || COLORS.neonGreen,
-                routePoints: mergedPoints,
-                activityType,
-              });
-            } else {
-              await AsyncStorage.removeItem(SESSION_KEY).catch(() => {});
-              submittingRef.current = false;
-              Alert.alert('Short Run', 'Run logged. Run further to generate territory polygons on the map!');
+              Alert.alert('Run too short', 'Not enough GPS points were recorded to save this activity. Make sure GPS is on and try a longer route.');
+              return;
             }
+
+            // Durable hand-off: the run is written to the offline queue BEFORE the
+            // crash-recovery session is cleared, so it can never be lost.
+            setSyncNotice('Saving your run…');
+            const result = await RunSyncService.submit({
+              userId: user.uid,
+              routePoints: mergedPoints.map(p => ({ latitude: p.latitude, longitude: p.longitude, timestamp: p.timestamp, ...((p as any).accuracy ? { accuracy: (p as any).accuracy } : {}) })),
+              activityType: mappedActivity,
+              claim: mergedPoints.length >= 3 ? { runSessionId: finishedSessionId || ('session_' + Date.now()), color: user.color || COLORS.neonGreen } : null,
+            });
+            await AsyncStorage.removeItem(SESSION_KEY).catch(() => {});
+            submittingRef.current = false;
+            setSyncNotice(null);
+
+            if (result.status === 'queued') {
+              Alert.alert('Saved offline', 'Your run is stored on this phone and will upload automatically when you are back online.' + (result.error ? '\n\n(' + result.error + ')' : ''));
+            }
+
+            navigation.navigate('PostRun', {
+              distanceMeters: result.distanceMeters ?? finalDistance,
+              elapsedSeconds: elapsed,
+              averageSpeedKmh: parseFloat(avgSpeed.toFixed(1)),
+              areaSquareMeters: result.claimArea ?? 0,
+              color: user.color || COLORS.neonGreen,
+              routePoints: mergedPoints,
+              activityType,
+              syncStatus: result.status,
+              claimStatus: result.claim ?? null,
+              claimReason: result.claimReason ?? null,
+            });
           },
         },
       ]
@@ -709,6 +741,15 @@ export default function RunScreen() {
   const playerClass = (user?.characterType || 'scout') as keyof typeof CLASS_THEMES;
   const classMeta = CLASS_THEMES[playerClass] || CLASS_THEMES.scout;
 
+  const fixFresh = !!gpsFix && Date.now() - gpsFix.at < 20000;
+  const gpsStatus = !fixFresh
+    ? { label: 'NO GPS FIX', color: COLORS.crimson }
+    : gpsFix!.accuracy <= 15
+    ? { label: 'GPS STRONG', color: COLORS.neonGreen }
+    : gpsFix!.accuracy <= 35
+    ? { label: 'GPS FAIR', color: COLORS.warningAmber }
+    : { label: 'GPS WEAK', color: COLORS.crimson };
+
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
@@ -738,7 +779,7 @@ export default function RunScreen() {
 
           const isMine = t.userId === user?.uid;
           const strokeColor = isMine ? (user?.color || COLORS.neonGreen) : (t.color || COLORS.crimson);
-          const fillColor = isMine ? 'rgba(0, 255, 136, 0.28)' : 'rgba(255, 42, 85, 0.22)';
+          const fillColor = isMine ? 'rgba(34, 197, 94, 0.28)' : 'rgba(239, 68, 68, 0.22)';
 
           return (
             <Polygon
@@ -790,20 +831,8 @@ export default function RunScreen() {
           </View>
 
           <View style={styles.gpsBadge}>
-            <View
-              style={[
-                styles.gpsDot,
-                {
-                  backgroundColor:
-                    state.gpsAccuracy === 'high'
-                      ? COLORS.neonGreen
-                      : state.gpsAccuracy === 'fair'
-                      ? COLORS.warningAmber
-                      : COLORS.crimson,
-                },
-              ]}
-            />
-            <Text style={styles.gpsText}>GPS LOCK</Text>
+            <View style={[styles.gpsDot, { backgroundColor: gpsStatus.color }]} />
+            <Text style={styles.gpsText} testID="run-gps-status">{gpsStatus.label}</Text>
           </View>
         </View>
 
@@ -845,28 +874,13 @@ export default function RunScreen() {
             </Text>
           </View>
 
-          <TouchableOpacity
-            style={[styles.battleBoostBtn, { backgroundColor: activeZoneOwner.color }]}
-            onPress={async () => {
-              try {
-                const res = await apiFetch('/api/territory/boost', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ userId: user?.uid }),
-                });
-                const data = await res.json();
-                if (res.ok) {
-                  Alert.alert('⚡ 2X CAPTURE BOOST!', `Boost activated! Remaining Arena Coins: ${data.remainingCoins}`);
-                } else {
-                  Alert.alert('Boost Failed', data.error || 'Insufficient Arena Coins.');
-                }
-              } catch (e) {
-                Alert.alert('Network Error', 'Could not activate boost.');
-              }
-            }}
-          >
-            <Text style={styles.battleBoostText}>BOOST ⚡</Text>
-          </TouchableOpacity>
+        </View>
+      )}
+
+      {syncNotice && (
+        <View style={styles.syncNotice}>
+          <ActivityIndicator size="small" color={COLORS.neonGreen} />
+          <Text style={styles.syncNoticeText}>{syncNotice}</Text>
         </View>
       )}
 
@@ -880,7 +894,7 @@ export default function RunScreen() {
       {/* ── Bottom Runner Cockpit Controls ──
           bottom = tabBarHeight + 12 so the START button is always visible
           above the absolutely-positioned bottom tab bar on every device. */}
-      <View style={[styles.bottomControlsArea, { bottom: tabBarHeight + 12 }]}>
+      <View style={[styles.bottomControlsArea, { bottom: 12 }]}>
         {/* Activity Selector (Only enabled before run starts) */}
         {!state.isRunning && (
           <View style={styles.activitySelectorRow}>
@@ -995,6 +1009,12 @@ export default function RunScreen() {
 }
 
 const styles = StyleSheet.create({
+  syncNotice: {
+    position: 'absolute', alignSelf: 'center', top: '45%', flexDirection: 'row', alignItems: 'center',
+    gap: 10, backgroundColor: COLORS.bgSurfaceElevated, borderColor: COLORS.border, borderWidth: 1,
+    paddingHorizontal: 18, paddingVertical: 12, borderRadius: 999, elevation: 30, zIndex: 30,
+  },
+  syncNoticeText: { color: COLORS.textPrimary, fontSize: 14, fontWeight: '700' },
   container: {
     flex: 1,
     backgroundColor: COLORS.bgCanvas,
@@ -1016,7 +1036,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: 'rgba(16, 16, 32, 0.90)',
+    backgroundColor: 'rgba(16, 27, 45, 0.90)',
     borderRadius: RADII.pill,
     paddingHorizontal: 14,
     paddingVertical: 8,
@@ -1175,7 +1195,7 @@ const styles = StyleSheet.create({
   activitySelectorRow: {
     flexDirection: 'row',
     justifyContent: 'space-around',
-    backgroundColor: 'rgba(16, 16, 32, 0.92)',
+    backgroundColor: 'rgba(16, 27, 45, 0.92)',
     borderRadius: RADII.pill,
     padding: 4,
     borderWidth: 1,
@@ -1191,7 +1211,7 @@ const styles = StyleSheet.create({
     borderRadius: RADII.pill,
   },
   activityPillActive: {
-    backgroundColor: 'rgba(0, 255, 136, 0.18)',
+    backgroundColor: 'rgba(34, 197, 94, 0.18)',
     borderWidth: 1,
     borderColor: COLORS.neonGreen,
   },

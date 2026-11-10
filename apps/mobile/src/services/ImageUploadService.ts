@@ -12,6 +12,7 @@
  *   - Failures surface the HTTP / Firebase error message to the caller.
  */
 import { storage } from '@/config/firebase';
+import { ensureFirebaseSession } from '@/services/FirebaseSession';
 import {
   ref as storageRef,
   uploadBytesResumable,
@@ -92,7 +93,10 @@ export async function uploadPostImage(image: LocalImage, opts: UploadOptions): P
     );
   }
 
-  // 2. Build a user-scoped path so Storage rules can gate writes by uid.
+  // 2. Make sure Firebase Auth uid === our user id (Storage rules check this).
+  await ensureFirebaseSession(opts.userId);
+
+  // 3. Build a user-scoped path so Storage rules can gate writes by uid.
   const kind = opts.kind || 'post';
   const filename = `${Date.now()}.${extForMime(mime)}`;
   const path = `${kind}-images/${opts.userId}/${filename}`;
@@ -108,7 +112,16 @@ export async function uploadPostImage(image: LocalImage, opts: UploadOptions): P
           opts.onProgress(snap.bytesTransferred / snap.totalBytes);
         }
       },
-      (err) => reject(err instanceof Error ? err : new Error(String(err))),
+      (err: any) => {
+        const code = String(err?.code || '');
+        const friendly =
+          code === 'storage/unauthorized' ? 'Upload was not permitted. Please log out and back in, then try again.' :
+          code === 'storage/canceled' ? 'Upload cancelled.' :
+          code === 'storage/retry-limit-exceeded' ? 'Upload timed out. Check your connection and try again.' :
+          code === 'storage/quota-exceeded' ? 'Storage quota exceeded. Please try again later.' :
+          (err?.message || 'Upload failed.');
+        reject(new Error(friendly));
+      },
       () => resolve()
     );
   });

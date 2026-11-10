@@ -16,11 +16,12 @@ import {
   Alert,
 } from 'react-native';
 import { CHARACTER_EMOJI, CharacterType } from '@runwars/shared';
+import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '@/context/AuthContext';
 import * as ImagePicker from 'expo-image-picker';
 import { socketService } from '@/services/SocketService';
 
-import { apiFetch } from '@/config/api';
+import { apiFetch, errorMessage } from '@/config/api';
 import { uploadPostImage } from '@/services/ImageUploadService';
 
 interface FeedItem {
@@ -142,17 +143,24 @@ export default function FeedScreen() {
   const [loadingProfile, setLoadingProfile] = useState(false);
 
   const [expandedPosts, setExpandedPosts] = useState<Record<string, boolean>>({});
+  const [feedError, setFeedError] = useState<string | null>(null);
+  const navigation = useNavigation<any>();
 
   const fetchFeed = useCallback(async () => {
     try {
-      const res = await apiFetch(`/api/feed?userId=${user?.uid || ''}`, {
-        headers: { 'Bypass-Tunnel-Reminder': 'true' }
-      });
-      if (!res.ok) throw new Error('Failed to load feed');
+      const res = await apiFetch('/api/feed?limit=50');
+      if (!res.ok) throw new Error(await errorMessage(res, 'Failed to load the feed.'));
       const data = await res.json();
-      setFeed(data);
-    } catch (err) {
-      console.error('[Feed] Failed to fetch:', err);
+      setFeed((Array.isArray(data) ? data : []).map((row: any) => ({
+        ...row,
+        id: String(row.id),
+        feed_type: row.post_type === 'announcement' || row.feed_type === 'announcement' ? 'announcement' : 'post',
+        liked_by_user: row.liked_by_user ?? !!row.is_liked,
+        body: row.body ?? row.content,
+      })));
+      setFeedError(null);
+    } catch (err: any) {
+      setFeedError(err?.message || 'Could not load the feed.');
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -198,7 +206,7 @@ export default function FeedScreen() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId: user.uid }),
       });
-      if (!res.ok) throw new Error('Like request failed');
+      if (!res.ok) throw new Error(await errorMessage(res, 'Failed to update like.'));
       const data = await res.json();
       setFeed(prev =>
         prev.map(item =>
@@ -215,7 +223,7 @@ export default function FeedScreen() {
             : item
         )
       );
-      Alert.alert('Error', 'Failed to toggle like.');
+      Alert.alert('Like', (err as any)?.message || 'Failed to update like.');
     }
   };
 
@@ -261,58 +269,23 @@ export default function FeedScreen() {
           )
         );
       } else {
-        throw new Error('Comment failed');
+        throw new Error(await errorMessage(res, 'Failed to publish comment.'));
       }
-    } catch (err) {
-      Alert.alert('Error', 'Failed to publish comment.');
+    } catch (err: any) {
+      Alert.alert('Comment', err?.message || 'Failed to publish comment.');
     } finally {
       setSubmittingComment(false);
     }
   };
 
-  const [submittingFriend, setSubmittingFriend] = useState(false);
-
-  const toggleFriend = async (targetUserId: string, isCurrentlyFriend: boolean) => {
-    if (!user) return;
-    setSubmittingFriend(true);
-    try {
-      const endpoint = isCurrentlyFriend ? '/api/friends/remove' : '/api/friends/add';
-      const res = await apiFetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: user.uid, friendId: targetUserId })
-      });
-      if (res.ok) {
-        openUserProfile(targetUserId);
-      }
-    } catch (err) {
-      console.error('[Feed] Failed to toggle friend:', err);
-    } finally {
-      setSubmittingFriend(false);
-    }
-  };
-
-  const openUserProfile = async (targetUserId: string) => {
-    setProfileVisible(true);
-    setLoadingProfile(true);
-    setProfileData(null);
-    try {
-      const res = await apiFetch(`/api/profile/${targetUserId}`, {
-        headers: { 'Bypass-Tunnel-Reminder': 'true' }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setProfileData(data);
-      }
-    } catch (err) {
-      console.error('[Feed] Failed to load profile:', err);
-    } finally {
-      setLoadingProfile(false);
-    }
+  const openUserProfile = (targetUserId: string) => {
+    if (!targetUserId || targetUserId === 'admin') return;
+    if (targetUserId === user?.uid) navigation.navigate('PROFILE');
+    else navigation.navigate('UserProfile', { userId: targetUserId });
   };
 
   const submitPost = async () => {
-    if (!postContent.trim() || !user) return;
+    if ((!postContent.trim() && !postImage) || !user) return;
     setSubmittingPost(true);
     try {
       let remoteImageUrl: string | undefined;
@@ -357,8 +330,8 @@ export default function FeedScreen() {
         const err = await res.json().catch(() => ({}));
         Alert.alert('Publish Failed', err.error || 'Server error');
       }
-    } catch (err) {
-      Alert.alert('Error', 'Network request failed.');
+    } catch (err: any) {
+      Alert.alert('Could not post', err?.message || 'Network request failed.');
     } finally {
       setSubmittingPost(false);
     }
@@ -432,11 +405,11 @@ export default function FeedScreen() {
       return (
         <View style={[styles.card, styles.announcementCard]}>
           <View style={styles.cardHeader}>
-            <View style={[styles.avatarContainer, { backgroundColor: '#FF8C0022', borderColor: '#FF8C00' }]}>
+            <View style={[styles.avatarContainer, { backgroundColor: '#FF8C0022', borderColor: '#F59E0B' }]}>
               <Text style={styles.avatarEmoji}>📢</Text>
             </View>
             <View style={styles.headerInfo}>
-              <Text style={[styles.ownerName, { color: '#FF8C00' }]}>ANNOUNCEMENT</Text>
+              <Text style={[styles.ownerName, { color: '#F59E0B' }]}>ANNOUNCEMENT</Text>
               <Text style={styles.timeText}>{timeAgo(item.created_at)}</Text>
             </View>
             <View style={styles.announceBadge}>
@@ -477,7 +450,7 @@ export default function FeedScreen() {
         <View style={styles.cardHeader}>
           <TouchableOpacity
             onPress={() => item.user_id && openUserProfile(item.user_id)}
-            style={[styles.avatarContainer, { borderColor: item.color || '#00BFFF' }]}
+            style={[styles.avatarContainer, { borderColor: item.color || '#38BDF8' }]}
           >
             <Text style={styles.avatarEmoji}>{emoji}</Text>
           </TouchableOpacity>
@@ -559,9 +532,12 @@ export default function FeedScreen() {
         </View>
       ) : feed.length === 0 ? (
         <View style={styles.center}>
-          <Text style={styles.emptyEmoji}>👥</Text>
-          <Text style={styles.emptyText}>Social feed is empty.</Text>
-          <Text style={styles.emptySub}>Post an update or claim territories to start the feed!</Text>
+          <Text style={styles.emptyEmoji}>{feedError ? '⚠️' : '👥'}</Text>
+          <Text style={styles.emptyText}>{feedError ? 'Feed unavailable' : 'Social feed is empty.'}</Text>
+          <Text style={styles.emptySub}>{feedError || 'Post an update or claim territories to start the feed!'}</Text>
+          <TouchableOpacity style={styles.retryBtn} onPress={() => { setLoading(true); fetchFeed(); }} testID="feed-retry">
+            <Text style={styles.retryText}>{feedError ? 'Try again' : 'Refresh'}</Text>
+          </TouchableOpacity>
         </View>
       ) : (
         <FlatList
@@ -630,9 +606,10 @@ export default function FeedScreen() {
             </View>
 
             <TouchableOpacity
-              style={[styles.publishBtn, !postContent.trim() && styles.publishBtnDisabled]}
-              disabled={!postContent.trim() || submittingPost}
+              style={[styles.publishBtn, (!postContent.trim() && !postImage) && styles.publishBtnDisabled]}
+              disabled={(!postContent.trim() && !postImage) || submittingPost}
               onPress={submitPost}
+              testID="feed-publish"
             >
               {submittingPost ? (
                 <ActivityIndicator color="#0D0D1A" />
@@ -724,175 +701,113 @@ export default function FeedScreen() {
         </View>
       </Modal>
 
-      <Modal visible={profileVisible} transparent animationType="fade">
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setProfileVisible(false)}
-        >
-          <View style={styles.profileCard} onStartShouldSetResponder={() => true}>
-            {loadingProfile ? (
-              <ActivityIndicator color="#00BFFF" size="large" />
-            ) : profileData ? (
-              <>
-                <View style={[styles.profileAvatar, { borderColor: profileData.user.color }]}>
-                  <Text style={styles.profileAvatarEmoji}>
-                    {CHARACTER_EMOJI[profileData.user.character_type as CharacterType] || '🏃'}
-                  </Text>
-                </View>
-                <Text style={styles.profileName}>{profileData.user.display_name}</Text>
-                <Text style={[styles.profileClass, { color: profileData.user.color }]}>
-                  {profileData.user.character_type.toUpperCase()}
-                </Text>
-                {profileData.user.bio ? (
-                  <Text style={styles.profileBio}>"{profileData.user.bio}"</Text>
-                ) : null}
 
-                <View style={styles.profileDivider} />
-
-                <View style={styles.statsGrid}>
-                  <View style={styles.statsGridCol}>
-                    <Text style={styles.gridStatVal}>
-                      {((profileData.stats.total_distance || 0) / 1000).toFixed(1)}
-                    </Text>
-                    <Text style={styles.gridStatLbl}>KM</Text>
-                  </View>
-                  <View style={styles.statsGridCol}>
-                    <Text style={styles.gridStatVal}>{profileData.stats.total_runs || 0}</Text>
-                    <Text style={styles.gridStatLbl}>RUNS</Text>
-                  </View>
-                  <View style={styles.statsGridCol}>
-                    <Text style={styles.gridStatVal}>{profileData.stats.total_zones || 0}</Text>
-                    <Text style={styles.gridStatLbl}>ZONES</Text>
-                  </View>
-                </View>
-
-                {profileData.user.id !== user?.uid && (
-                  <TouchableOpacity
-                    style={[styles.friendBtn, profileData.friends?.some((f: any) => f.id === user?.uid) && styles.friendBtnActive]}
-                    disabled={submittingFriend}
-                    onPress={() => toggleFriend(profileData.user.id, !!profileData.friends?.some((f: any) => f.id === user?.uid))}
-                  >
-                    {submittingFriend ? (
-                      <ActivityIndicator color="#FFFFFF" size="small" />
-                    ) : (
-                      <Text style={[styles.friendBtnText, profileData.friends?.some((f: any) => f.id === user?.uid) && styles.friendBtnTextActive]}>
-                        {profileData.friends?.some((f: any) => f.id === user?.uid) ? '🤝 Friends' : '➕ Add Friend'}
-                      </Text>
-                    )}
-                  </TouchableOpacity>
-                )}
-              </>
-            ) : (
-              <Text style={styles.noCommentsText}>Failed to load profile details.</Text>
-            )}
-          </View>
-        </TouchableOpacity>
-      </Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0D0D1A' },
+  container: { flex: 1, backgroundColor: '#0B1220' },
   header: {
-    paddingTop: 55,
+    paddingTop: 14,
     paddingBottom: 16,
     paddingHorizontal: 20,
-    backgroundColor: '#111124',
+    backgroundColor: '#101B2D',
     borderBottomWidth: 1,
-    borderBottomColor: '#1E1E38',
+    borderBottomColor: '#29384F',
   },
-  headerTitle: { fontSize: 22, fontWeight: '900', color: '#00BFFF', letterSpacing: 2 },
-  headerSub: { fontSize: 12, color: '#4A4A6A', marginTop: 4 },
+  headerTitle: { fontSize: 22, fontWeight: '900', color: '#38BDF8', letterSpacing: 2 },
+  headerSub: { fontSize: 12, color: '#64748B', marginTop: 4 },
   scroll: { padding: 16, paddingBottom: 100 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  loadingText: { color: '#00BFFF', marginTop: 16, fontSize: 14, fontWeight: '600' },
+  loadingText: { color: '#38BDF8', marginTop: 16, fontSize: 14, fontWeight: '600' },
   emptyEmoji: { fontSize: 64, marginBottom: 16 },
   emptyText: { color: '#FFFFFF', fontSize: 18, fontWeight: '700' },
-  emptySub: { color: '#4A4A6A', fontSize: 13, marginTop: 8, textAlign: 'center', paddingHorizontal: 20 },
-  card: { backgroundColor: '#16162A', borderRadius: 12, borderWidth: 1, borderColor: '#2A2A4A', marginBottom: 16, padding: 16 },
+  retryBtn: { marginTop: 16, height: 44, paddingHorizontal: 24, borderRadius: 8, borderWidth: 1, borderColor: '#38BDF8', alignItems: 'center', justifyContent: 'center' },
+  retryText: { color: '#38BDF8', fontSize: 14, fontWeight: '700' },
+  emptySub: { color: '#64748B', fontSize: 13, marginTop: 8, textAlign: 'center', paddingHorizontal: 20 },
+  card: { backgroundColor: '#162238', borderRadius: 12, borderWidth: 1, borderColor: '#29384F', marginBottom: 16, padding: 16 },
   announcementCard: { borderColor: '#FF8C0066', backgroundColor: '#1E1408' },
   cardHeader: { flexDirection: 'row', alignItems: 'center' },
-  avatarContainer: { width: 44, height: 44, borderRadius: 22, borderWidth: 2, backgroundColor: '#0D0D1A', alignItems: 'center', justifyContent: 'center' },
+  avatarContainer: { width: 44, height: 44, borderRadius: 22, borderWidth: 2, backgroundColor: '#0B1220', alignItems: 'center', justifyContent: 'center' },
   avatarEmoji: { fontSize: 20 },
   headerInfo: { marginLeft: 12, flex: 1 },
   nameRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   ownerName: { fontSize: 14, fontWeight: '800', color: '#FFFFFF' },
   classBadge: { fontSize: 8, fontWeight: '900', paddingHorizontal: 5, paddingVertical: 2, borderRadius: 4, borderWidth: 1 },
-  timeText: { fontSize: 11, color: '#4A4A6A', marginTop: 2 },
+  timeText: { fontSize: 11, color: '#64748B', marginTop: 2 },
   announceBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4, backgroundColor: '#FF8C0022', borderWidth: 1, borderColor: '#FF8C0044' },
-  announceBadgeText: { fontSize: 9, fontWeight: '900', color: '#FF8C00' },
+  announceBadgeText: { fontSize: 9, fontWeight: '900', color: '#F59E0B' },
   cardBody: { marginVertical: 12 },
-  announceTitle: { fontSize: 16, fontWeight: '900', color: '#FF8C00', marginBottom: 6 },
-  messageText: { fontSize: 14, color: '#CCCCCC', lineHeight: 21 },
-  readMoreText: { color: '#00BFFF', fontWeight: '800' },
-  postImage: { width: '100%', height: 240, borderRadius: 8, marginVertical: 8, backgroundColor: '#0D0D1A' },
+  announceTitle: { fontSize: 16, fontWeight: '900', color: '#F59E0B', marginBottom: 6 },
+  messageText: { fontSize: 14, color: '#CBD5E1', lineHeight: 21 },
+  readMoreText: { color: '#38BDF8', fontWeight: '800' },
+  postImage: { width: '100%', height: 240, borderRadius: 8, marginVertical: 8, backgroundColor: '#0B1220' },
   countsRow: { flexDirection: 'row', justifyContent: 'space-between', paddingTop: 8, borderTopWidth: 1, borderTopColor: '#2A2A4A44' },
-  countText: { fontSize: 11, color: '#4A4A6A', fontWeight: '600' },
+  countText: { fontSize: 11, color: '#64748B', fontWeight: '600' },
   cardFooter: { flexDirection: 'row', marginTop: 10, borderTopWidth: 1, borderTopColor: '#2A2A4A44', paddingTop: 10, gap: 16 },
   footerBtn: { flex: 1, alignItems: 'center', paddingVertical: 8, borderRadius: 8, backgroundColor: '#2A2A4A33' },
   footerBtnActive: { backgroundColor: '#00BFFF11' },
-  footerBtnText: { fontSize: 12, color: '#8A8AAB', fontWeight: '800' },
-  footerBtnTextActive: { color: '#00BFFF' },
-  fab: { position: 'absolute', bottom: 24, right: 24, width: 56, height: 56, borderRadius: 28, backgroundColor: '#00BFFF', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 5, elevation: 8 },
-  fabText: { fontSize: 32, color: '#0D0D1A', fontWeight: '300', marginTop: -2 },
+  footerBtnText: { fontSize: 12, color: '#94A3B8', fontWeight: '800' },
+  footerBtnTextActive: { color: '#38BDF8' },
+  fab: { position: 'absolute', bottom: 24, right: 24, width: 56, height: 56, borderRadius: 28, backgroundColor: '#38BDF8', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 5, elevation: 8 },
+  fabText: { fontSize: 32, color: '#0B1220', fontWeight: '300', marginTop: -2 },
   modalOverlay: { flex: 1, backgroundColor: '#000000AA', justifyContent: 'center', alignItems: 'center' },
-  composerCard: { width: '90%', backgroundColor: '#16162A', borderRadius: 16, borderWidth: 1.5, borderColor: '#00BFFF44', padding: 20, gap: 16 },
+  composerCard: { width: '90%', backgroundColor: '#162238', borderRadius: 16, borderWidth: 1.5, borderColor: '#00BFFF44', padding: 20, gap: 16 },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   modalTitle: { fontSize: 18, fontWeight: '900', color: '#FFFFFF' },
-  closeText: { color: '#FF3B30', fontWeight: '700' },
-  composerInput: { backgroundColor: '#0D0D1A', borderRadius: 8, color: '#FFFFFF', padding: 12, fontSize: 14, height: 120, textAlignVertical: 'top', borderWidth: 1, borderColor: '#2A2A4A' },
+  closeText: { color: '#EF4444', fontWeight: '700' },
+  composerInput: { backgroundColor: '#0B1220', borderRadius: 8, color: '#FFFFFF', padding: 12, fontSize: 14, height: 120, textAlignVertical: 'top', borderWidth: 1, borderColor: '#29384F' },
   inputGroup: {},
-  inputLabel: { fontSize: 11, color: '#4A4A6A', fontWeight: '800', marginBottom: 6 },
-  imageInput: { backgroundColor: '#0D0D1A', borderRadius: 8, color: '#FFFFFF', padding: 10, fontSize: 13, borderWidth: 1, borderColor: '#2A2A4A' },
-  publishBtn: { backgroundColor: '#00BFFF', paddingVertical: 12, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  publishBtnDisabled: { backgroundColor: '#4A4A6A', opacity: 0.5 },
-  publishText: { color: '#0D0D1A', fontWeight: '900', fontSize: 14 },
-  commentDrawer: { width: '100%', height: '75%', marginTop: 'auto', backgroundColor: '#111124', borderTopLeftRadius: 20, borderTopRightRadius: 20, borderWidth: 1.5, borderColor: '#2A2A4A', padding: 16 },
+  inputLabel: { fontSize: 11, color: '#64748B', fontWeight: '800', marginBottom: 6 },
+  imageInput: { backgroundColor: '#0B1220', borderRadius: 8, color: '#FFFFFF', padding: 10, fontSize: 13, borderWidth: 1, borderColor: '#29384F' },
+  publishBtn: { backgroundColor: '#38BDF8', paddingVertical: 12, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  publishBtnDisabled: { backgroundColor: '#64748B', opacity: 0.5 },
+  publishText: { color: '#0B1220', fontWeight: '900', fontSize: 14 },
+  commentDrawer: { width: '100%', height: '75%', marginTop: 'auto', backgroundColor: '#101B2D', borderTopLeftRadius: 20, borderTopRightRadius: 20, borderWidth: 1.5, borderColor: '#29384F', padding: 16 },
   drawerHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   drawerTitle: { fontSize: 18, fontWeight: '900', color: '#FFFFFF' },
   drawerLoading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  noCommentsText: { color: '#4A4A6A', textAlign: 'center' },
+  noCommentsText: { color: '#64748B', textAlign: 'center' },
   commentsList: { paddingBottom: 20 },
   commentRow: { flexDirection: 'row', gap: 10, marginBottom: 14 },
-  commentAvatar: { width: 32, height: 32, borderRadius: 16, borderWidth: 1.5, backgroundColor: '#0D0D1A', alignItems: 'center', justifyContent: 'center' },
+  commentAvatar: { width: 32, height: 32, borderRadius: 16, borderWidth: 1.5, backgroundColor: '#0B1220', alignItems: 'center', justifyContent: 'center' },
   commentAvatarEmoji: { fontSize: 14 },
-  commentInfo: { flex: 1, backgroundColor: '#16162A', borderRadius: 8, padding: 8 },
+  commentInfo: { flex: 1, backgroundColor: '#162238', borderRadius: 8, padding: 8 },
   commentName: { fontSize: 12, fontWeight: '800', color: '#FFFFFF' },
-  commentText: { fontSize: 13, color: '#CCCCCC', marginTop: 2 },
-  commentTime: { fontSize: 9, color: '#4A4A6A', marginTop: 4 },
-  commentComposer: { flexDirection: 'row', gap: 8, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#2A2A4A' },
-  commentInput: { flex: 1, backgroundColor: '#0D0D1A', borderRadius: 20, color: '#FFFFFF', paddingHorizontal: 16, paddingVertical: 8, borderWidth: 1, borderColor: '#2A2A4A' },
-  commentSubmitBtn: { backgroundColor: '#00BFFF', borderRadius: 20, paddingHorizontal: 16, justifyContent: 'center', alignItems: 'center' },
-  commentSubmitDisabled: { backgroundColor: '#4A4A6A', opacity: 0.5 },
-  commentSubmitText: { color: '#0D0D1A', fontWeight: '900', fontSize: 12 },
-  profileCard: { width: '80%', backgroundColor: '#16162A', borderRadius: 16, borderWidth: 1.5, borderColor: '#00BFFF', padding: 24, alignItems: 'center' },
-  profileAvatar: { width: 80, height: 80, borderRadius: 40, borderWidth: 3, backgroundColor: '#0D0D1A', alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
+  commentText: { fontSize: 13, color: '#CBD5E1', marginTop: 2 },
+  commentTime: { fontSize: 9, color: '#64748B', marginTop: 4 },
+  commentComposer: { flexDirection: 'row', gap: 8, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#29384F' },
+  commentInput: { flex: 1, backgroundColor: '#0B1220', borderRadius: 20, color: '#FFFFFF', paddingHorizontal: 16, paddingVertical: 8, borderWidth: 1, borderColor: '#29384F' },
+  commentSubmitBtn: { backgroundColor: '#38BDF8', borderRadius: 20, paddingHorizontal: 16, justifyContent: 'center', alignItems: 'center' },
+  commentSubmitDisabled: { backgroundColor: '#64748B', opacity: 0.5 },
+  commentSubmitText: { color: '#0B1220', fontWeight: '900', fontSize: 12 },
+  profileCard: { width: '80%', backgroundColor: '#162238', borderRadius: 16, borderWidth: 1.5, borderColor: '#38BDF8', padding: 24, alignItems: 'center' },
+  profileAvatar: { width: 80, height: 80, borderRadius: 40, borderWidth: 3, backgroundColor: '#0B1220', alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
   profileAvatarEmoji: { fontSize: 44 },
   profileName: { fontSize: 18, fontWeight: '900', color: '#FFFFFF' },
   profileClass: { fontSize: 11, fontWeight: '900', marginTop: 4 },
-  profileBio: { fontSize: 13, color: '#8A8AAB', textAlign: 'center', marginTop: 10, fontStyle: 'italic' },
-  profileDivider: { width: '100%', height: 1, backgroundColor: '#2A2A4A', marginVertical: 16 },
+  profileBio: { fontSize: 13, color: '#94A3B8', textAlign: 'center', marginTop: 10, fontStyle: 'italic' },
+  profileDivider: { width: '100%', height: 1, backgroundColor: '#29384F', marginVertical: 16 },
   statsGrid: { flexDirection: 'row', width: '100%', justifyContent: 'space-around' },
   statsGridCol: { alignItems: 'center' },
   gridStatVal: { fontSize: 16, fontWeight: '900', color: '#FFFFFF' },
-  gridStatLbl: { fontSize: 9, color: '#4A4A6A', fontWeight: '800', marginTop: 2 },
-  imagePickerBtn: { backgroundColor: '#0D0D1A', borderRadius: 8, borderWidth: 1, borderColor: '#2A2A4A', borderStyle: 'dashed', paddingVertical: 16, alignItems: 'center', justifyContent: 'center' },
-  imagePickerBtnText: { color: '#00BFFF', fontSize: 13, fontWeight: '800' },
+  gridStatLbl: { fontSize: 9, color: '#64748B', fontWeight: '800', marginTop: 2 },
+  imagePickerBtn: { backgroundColor: '#0B1220', borderRadius: 8, borderWidth: 1, borderColor: '#29384F', borderStyle: 'dashed', paddingVertical: 16, alignItems: 'center', justifyContent: 'center' },
+  imagePickerBtnText: { color: '#38BDF8', fontSize: 13, fontWeight: '800' },
   selectedImageContainer: { alignItems: 'center', gap: 8 },
-  selectedImagePreview: { width: '100%', height: 120, borderRadius: 8, backgroundColor: '#0D0D1A' },
+  selectedImagePreview: { width: '100%', height: 120, borderRadius: 8, backgroundColor: '#0B1220' },
   clearImageBtn: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 12, backgroundColor: '#FF3B3022' },
-  clearImageText: { color: '#FF3B30', fontSize: 11, fontWeight: '800' },
-  uploadProgressWrap: { width: '100%', height: 20, borderRadius: 10, backgroundColor: '#0D0D1A', overflow: 'hidden', position: 'relative', borderWidth: 1, borderColor: '#2A2A4A' },
-  uploadProgressBar: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: '#00BFFF' },
+  clearImageText: { color: '#EF4444', fontSize: 11, fontWeight: '800' },
+  uploadProgressWrap: { width: '100%', height: 20, borderRadius: 10, backgroundColor: '#0B1220', overflow: 'hidden', position: 'relative', borderWidth: 1, borderColor: '#29384F' },
+  uploadProgressBar: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: '#38BDF8' },
   uploadProgressLabel: { color: '#FFFFFF', fontSize: 10, fontWeight: '800', textAlign: 'center', lineHeight: 20 },
   postDeleteBtn: { paddingHorizontal: 8, paddingVertical: 4 },
-  postDeleteText: { color: '#8A8AAB', fontSize: 22, fontWeight: '800' },
+  postDeleteText: { color: '#94A3B8', fontSize: 22, fontWeight: '800' },
   commentDeleteBtn: { paddingHorizontal: 6, paddingVertical: 4, justifyContent: 'flex-start' },
-  commentDeleteText: { color: '#FF3B30', fontSize: 14, fontWeight: '800' },
-  friendBtn: { backgroundColor: '#00BFFF', width: '100%', paddingVertical: 10, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginTop: 16 },
-  friendBtnActive: { backgroundColor: '#2A2A4A', borderWidth: 1, borderColor: '#00BFFF' },
-  friendBtnText: { color: '#0D0D1A', fontWeight: '900', fontSize: 13 },
-  friendBtnTextActive: { color: '#00BFFF' },
+  commentDeleteText: { color: '#EF4444', fontSize: 14, fontWeight: '800' },
+  friendBtn: { backgroundColor: '#38BDF8', width: '100%', paddingVertical: 10, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginTop: 16 },
+  friendBtnActive: { backgroundColor: '#29384F', borderWidth: 1, borderColor: '#38BDF8' },
+  friendBtnText: { color: '#0B1220', fontWeight: '900', fontSize: 13 },
+  friendBtnTextActive: { color: '#38BDF8' },
 });

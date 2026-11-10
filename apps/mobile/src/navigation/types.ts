@@ -45,4 +45,6 @@ export type RootStackParamList = {
   Main: undefined;
   PostRun: PostRunParams;
   FollowersList: FollowersListParams;
+  /** Full profile of any user (own profile lives in the PROFILE tab). */
+  UserProfile: { userId: string };
 };
