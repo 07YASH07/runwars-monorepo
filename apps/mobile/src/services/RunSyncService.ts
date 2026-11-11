@@ -60,7 +60,8 @@ async function submitOne(run: PendingRun): Promise<{ ok: boolean; retryable: boo
     const body = await res.json().catch(() => ({}));
     if (res.ok) return { ok: true, retryable: false, body };
     // 4xx (other than auth/rate limit) = the run itself is invalid → don't retry forever.
-    const retryable = res.status >= 500 || res.status === 401 || res.status === 429;
+    // 404 = endpoint not deployed yet; 401 = re-login needed; keep the run and retry later.
+    const retryable = res.status >= 500 || [401, 404, 408, 429].includes(res.status);
     return { ok: false, retryable, error: body?.error || `Server error ${res.status}` };
   } catch (e: any) {
     return { ok: false, retryable: true, error: e?.message || 'Network error' };
