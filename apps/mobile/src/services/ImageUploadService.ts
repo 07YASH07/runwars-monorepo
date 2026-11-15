@@ -80,13 +80,48 @@ export async function uploadPostImage(image: LocalImage, opts: UploadOptions): P
     throw new Error(`Unsupported image type: ${mime}`);
   }
 
-  // 1. Read the local file as a Blob. React Native's fetch supports file://
-  //    and content:// URIs returned by expo-image-picker.
-  const resp = await fetch(image.uri);
-  if (!resp.ok) throw new Error(`Could not read local image (${resp.status})`);
-  const blob = await resp.blob();
+  // 1. Read the local file as a native-backed Blob (see readLocalFileAsBlob).
+  const blob = await readLocalFileAsBlob(image.uri);
+  try {
+    return await uploadBlob(blob, image, mime, opts);
+  } finally {
+    // Release the native blob data; it is no longer needed once uploaded.
+    try { (blob as any).close?.(); } catch {}
+  }
+}
 
-  const sizeBytes = image.fileSize ?? blob.size ?? 0;
+/**
+ * Reads a file:// or content:// URI into a Blob held by React Native's native
+ * blob module.
+ *
+ * Do NOT use `fetch(uri).then(r => r.blob())` here: Expo SDK 52+ replaces the
+ * global fetch with expo/fetch, whose Response.blob() builds
+ * `new Blob([arrayBuffer])`, and React Native's Blob rejects ArrayBuffer parts
+ * ("Creating blobs from 'ArrayBuffer' and 'ArrayBufferView' are not
+ * supported"). An XMLHttpRequest with responseType 'blob' returns a native
+ * blob reference instead, which Firebase Storage can slice and upload.
+ */
+function readLocalFileAsBlob(uri: string): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.onload = () => {
+      // Local file reads report status 0 on some Android versions.
+      if ((xhr.status === 0 || (xhr.status >= 200 && xhr.status < 300)) && xhr.response) {
+        resolve(xhr.response as Blob);
+      } else {
+        reject(new Error(`Could not read local image (${xhr.status})`));
+      }
+    };
+    xhr.onerror = () => reject(new Error('Could not read the selected image.'));
+    xhr.open('GET', uri, true);
+    xhr.responseType = 'blob';
+    xhr.send(null);
+  });
+}
+
+async function uploadBlob(blob: Blob, image: LocalImage, mime: string, opts: UploadOptions): Promise<UploadResult> {
+  // The blob size is the bytes actually uploaded; the picker's fileSize is a fallback.
+  const sizeBytes = blob.size || image.fileSize || 0;
   if (sizeBytes > MAX_BYTES) {
     throw new Error(
       `Image is ${(sizeBytes / 1024 / 1024).toFixed(1)} MB — max ${(MAX_BYTES / 1024 / 1024).toFixed(0)} MB.`
