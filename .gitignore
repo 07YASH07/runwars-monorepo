@@ -64,3 +64,9 @@ data/
 logcat*.txt
 lt_*.txt
 serveo_*.txt
+
+# Private local data — never commit
+.env.backup-*
+apps/backend/.env.backup-*
+apps/backend/scripts/user-merge-map.json
+apps/backend/*pre-migrate*.json
